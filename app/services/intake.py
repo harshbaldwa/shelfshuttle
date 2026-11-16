@@ -1,9 +1,10 @@
+import errno
 import os
 import shutil
 from contextlib import suppress
 from pathlib import Path
 
-from app.core.paths import clean_component, directory_fd, regular_file
+from app.core.paths import UnsafePath, clean_component, directory_fd, regular_file
 from app.services.metadata import InvalidMedia
 
 
@@ -50,6 +51,33 @@ def receive_upload(root: Path, job_id: str, name: str, upload) -> Path:
 def discard_upload(path: Path) -> None:
     with directory_fd(path.parent.parent) as fd:
         shutil.rmtree(path.parent.name, dir_fd=fd)
+
+
+def remove_job_intake(deployment, job_id: str, epub_path: str | None) -> None:
+    if epub_path:
+        path = Path(epub_path)
+        if (
+            not path.parent.parent.is_relative_to(deployment.intake_mount)
+            or path.parent.name != job_id
+            or path.suffix.lower() != ".epub"
+        ):
+            raise UnsafePath("Restore the original intake mount before retrying deletion.")
+        with suppress(FileNotFoundError), directory_fd(path.parent.parent) as intake_fd:
+            with directory_fd(path.parent) as job_fd:
+                with suppress(FileNotFoundError):
+                    os.unlink(path.name, dir_fd=job_fd)
+                os.fsync(job_fd)
+            try:
+                os.rmdir(job_id, dir_fd=intake_fd)
+            except OSError as exc:
+                if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise
+            os.fsync(intake_fd)
+    with suppress(FileNotFoundError), directory_fd(deployment.data / "covers") as cover_fd:
+        for suffix in (".jpg", ".tmp"):
+            with suppress(FileNotFoundError):
+                os.unlink(f"{job_id}{suffix}", dir_fd=cover_fd)
+        os.fsync(cover_fd)
 
 
 def save_cover(root: Path, job_id: str, data: bytes) -> None:

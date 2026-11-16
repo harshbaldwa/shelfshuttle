@@ -1,6 +1,7 @@
 import errno
 import os
 import stat
+from base64 import b32encode
 from pathlib import Path
 from zipfile import ZipInfo
 
@@ -98,6 +99,7 @@ def test_combined_and_recovery_after_first_atomic_rename(rig, monkeypatch):
     assert (book / "Orbit.epub").exists()
     assert not Path(job["destinations"]["ebook"]).exists()
     assert get_job(rig, job["id"])["prepared"]
+    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 409
 
     monkeypatch.setattr(importing, "_rename_exclusive", rename)
     app = rig.app_factory()
@@ -151,21 +153,26 @@ def test_qbit_add_lost_response_recovers_and_tracks_real_progress(rig):
     assert audio.is_file()
 
 
-def test_bare_hash_does_not_submit_and_can_be_supplied_a_magnet(rig):
-    job = submit(rig, "audio", magnet="A" * 40)
+@pytest.mark.parametrize("digest", [DIGEST.upper(), b32encode(bytes.fromhex(DIGEST)).decode()])
+def test_bare_hash_submits_and_tracks_download(rig, digest):
+    rig.fake.break_after_add = True
+    job = submit(rig, "audio", magnet=digest)
     rig.tick()
-    review = get_job(rig, job["id"])
-    assert (review["status"], review["review_kind"]) == ("review", "hash")
-    assert rig.fake.adds == 0
-    action(rig, job["id"], "approve", torrent=MAGNET)
+    assert get_job(rig, job["id"])["status"] == "submitting"
+    assert rig.fake.submitted_magnets == [f"magnet:?xt=urn:btih:{DIGEST}"]
     rig.tick()
+    waiting = get_job(rig, job["id"])
+    assert (waiting["status"], waiting["progress"]) == ("downloading", 0)
+    assert "Waiting for peers" in waiting["detail"]
+    audio = write_audio(rig.downloads / "Orbit.m4b")
+    rig.fake.complete(rig.downloads, [audio], tags=rig.fake.torrents[DIGEST]["tags"])
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
     assert rig.fake.adds == 1
 
 
 def test_duplicate_in_app_and_existing_torrent_review(rig):
     # Same SHA-1 arrives as a hex magnet and then a base32 hash.
-    from base64 import b32encode
-
     job = submit(rig, "audio", magnet=MAGNET)
     duplicate = rig.submit("audio", magnet=b32encode(bytes.fromhex(DIGEST)).decode())
     assert duplicate.status_code == 409
@@ -296,6 +303,40 @@ def test_permission_errors_are_actionable_and_retriable(rig, monkeypatch):
     assert get_job(rig, job["id"])["status"] == "complete"
 
 
+def test_import_only_creates_missing_directories(rig, monkeypatch):
+    root = rig.deployment.ebook_mount
+    root.mkdir()
+    job = submit(rig)
+    mkdir = os.mkdir
+
+    def reject_mkdir_on_read_only_ancestor(path, *args, **kwargs):
+        if path == root.name:
+            raise OSError(errno.EROFS, "Read-only filesystem")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", reject_mkdir_on_read_only_ancestor)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+
+
+def test_read_only_stage_reports_mount_layout(rig, monkeypatch):
+    job = submit(rig)
+    mkdir = os.mkdir
+
+    def reject_staging_mkdir(path, *args, **kwargs):
+        if path == ".shelfshuttle":
+            raise OSError(errno.EROFS, "Read-only filesystem")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", reject_staging_mkdir)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed", result
+    assert "one writable parent mount" in result["detail"]
+    assert not Path(job["destinations"]["ebook"]).exists()
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -322,10 +363,11 @@ def test_archive_symlink_and_upload_filename_are_rejected(rig):
     assert not rig.deployment.intake_mount.exists()
 
 
-def test_dry_run_skips_library_writes_and_torrent_submission(rig):
+@pytest.mark.parametrize("torrent_input", [MAGNET, DIGEST])
+def test_dry_run_skips_library_writes_and_torrent_submission(rig, torrent_input):
     configure(rig, dry_run=True)
     ebook = submit(rig)
-    audio = submit(rig, "audio", magnet=MAGNET)
+    audio = submit(rig, "audio", magnet=torrent_input)
     rig.tick()
     assert get_job(rig, ebook["id"])["status"] == "dry_run"
     assert get_job(rig, audio["id"])["status"] == "review"

@@ -10,7 +10,7 @@ Check the Web UI URL from the container's network, including any proxy path. `lo
 
 ## A hash or magnet will not finish
 
-A bare v1 hash requires a torrent already in qBittorrent. For a new job, provide a full magnet. Check qBittorrent for paused torrents, missing metadata, unavailable peers, or stalled trackers. A submitted job waits for qBittorrent to list the torrent before offering a retry. For an existing torrent in another category, confirm that you want ShelfShuttle to monitor it without modifying it.
+A new download submitted with a bare v1 hash relies on peer discovery, such as DHT. Check qBittorrent for paused torrents, missing metadata, unavailable peers, or stalled trackers. If the download requires a tracker, add it in qBittorrent or provide the full magnet when creating the job. A submitted job waits for qBittorrent to list the torrent before offering a retry. For a magnet that matches an existing torrent, confirm that you want ShelfShuttle to monitor it.
 
 ## qBittorrent says complete but ShelfShuttle cannot read the files
 
@@ -20,12 +20,18 @@ Compare qBittorrent's save path and the actual file path with both download mapp
 
 Check that the container UID/GID can write each library parent, state directory, intake directory, and staging root. Use one mount for a library and its staging sibling. Separate bind mounts of directories on the same host disk can still fail with a cross-device rename error. Some network and virtual filesystems lack exclusive rename or directory synchronization. For new imports, prefer a local filesystem that supports both.
 
+With the Compose read-only root enabled, a mount directly at `/media/ebooks/library` leaves the default sibling `/media/ebooks/.shelfshuttle` on the read-only container filesystem. Mount the host parent at `/media/ebooks` and set `SHELFSHUTTLE_EBOOK_LIBRARY` to the mounted path of the existing book directory. If the directory is named `books` on the host, use `/media/ebooks/books`. ShelfShuttle creates staging beside it.
+
+After changing container library paths, recreate the ShelfShuttle container. Retry affected unprepared jobs, then confirm the updated destination in the review queue. A prepared job retains the paths it recorded for recovery.
+
 ## An import needs review
 
 - **Metadata differs.** Inspect the embedded metadata and confirm or edit the author and title.
 - **Destination already exists.** Keep the existing folder, choose a distinct name for an unprepared job, or resolve the conflict elsewhere and retry. The app never merges an existing book directory.
 - **Prepared files are missing or changed.** Restore the recorded staging directory or published destination from the same filesystem. If the process published the first half of a pairing and a second destination conflicts, resolve the conflict and retry.
 - **Multiple M4Bs or mixed formats.** Select one M4B or the appropriate MP3 tracks in qBittorrent and retry.
+
+Use **Delete from queue** on a job that has yet to start or prepare a library import. Confirm to remove the job and its uploaded EPUB. The action leaves qBittorrent and the libraries untouched. If cleanup is interrupted, the worker retries it when it resumes.
 
 ## How should I back up and update the app?
 

@@ -85,14 +85,18 @@ def directory_fd(path: Path, *, create: bool = False, mode: int = 0o755, owner=(
     try:
         for part in path.parts[1:]:
             made = False
-            if create:
+            try:
+                next_fd = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
                 try:
                     os.mkdir(part, mode | 0o700, dir_fd=fd)
                     made = True
                     os.fsync(fd)
                 except FileExistsError:
                     pass
-            next_fd = os.open(part, flags, dir_fd=fd)
+                next_fd = os.open(part, flags, dir_fd=fd)
             os.close(fd)
             fd = next_fd
             if made:
@@ -129,7 +133,12 @@ def describe_filesystem_error(error: OSError) -> str:
         return "A filesystem path contains a symlink or a non-directory component."
     if error.errno in {errno.EXDEV, errno.ENOTSUP, errno.ENOSYS}:
         return "Staging and library must share a mount that supports atomic, no-replace renames."
-    if error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}:
+    if error.errno == errno.EROFS:
+        return (
+            "A required path is on a read-only filesystem. "
+            "In Docker, use one writable parent mount for each library and its staging directory."
+        )
+    if error.errno in {errno.EACCES, errno.EPERM}:
         return "Filesystem access denied. Check mount permissions and configured UID/GID."
     if error.errno == errno.ENOSPC:
         return "The filesystem has insufficient space for staging or application state."

@@ -16,6 +16,7 @@ from app.api.jobs import (
     book_details,
     change_job,
     create_job,
+    delete_job,
     format_field,
     get_job,
     public_job,
@@ -254,7 +255,10 @@ async def action_page(request: Request, job_id: str):
     async with form(request) as data:
         try:
             protect(request, data)
-            await run_in_threadpool(change_job, runtime, job_id, data)
+            if data.get("intent") == "delete":
+                await run_in_threadpool(delete_job, runtime, job_id)
+            else:
+                await run_in_threadpool(change_job, runtime, job_id, data)
         except (ValueError, HTTPException) as exc:
             summary = await run_in_threadpool(dashboard_view, runtime)
             return view(
@@ -367,6 +371,13 @@ def cover_api(request: Request, job_id: str):
         return Response(cover_bytes(runtime.deployment.data, job_id), media_type="image/jpeg")
     except (OSError, ValueError) as exc:
         raise HTTPException(404, "No cover is available.") from exc
+
+
+@api_router.delete("/api/jobs/{job_id}", status_code=204)
+def delete_api(request: Request, job_id: str):
+    protect(request)
+    delete_job(request.app.state.runtime, job_id)
+    return Response(status_code=204)
 
 
 @api_router.post("/api/jobs/{job_id}/action")

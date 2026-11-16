@@ -1,14 +1,12 @@
-import fcntl
 import logging
 import math
-import os
 import time
 from pathlib import Path
 
 from sqlalchemy import select
 
-from app.core.paths import UnsafePath, describe_filesystem_error, directory_fd, regular_file
-from app.models.database import Job
+from app.core.paths import UnsafePath, describe_filesystem_error, regular_file
+from app.models.database import Job, queue_lock
 from app.services.importing import (
     NeedsReview,
     Source,
@@ -21,8 +19,9 @@ from app.services.importing import (
 from app.services.intake import save_cover
 from app.services.metadata import PROVIDERS, InvalidMedia, aggregate_audio, mismatches
 from app.services.qbittorrent import QBittorrent, TorrentError, TorrentUnavailable
+from app.services.queue import DELETING, finish_deletion
 
-ACTIVE = ("queued", "submitting", "downloading", "importing")
+ACTIVE = ("queued", "submitting", "downloading", "importing", DELETING)
 SEED_STATES = {"uploading", "stalledUP", "forcedUP", "queuedUP", "pausedUP", "stoppedUP"}
 LOG = logging.getLogger(__name__)
 
@@ -66,22 +65,9 @@ class Worker:
             stop.wait(delay)
 
     def tick(self, stop=None):
-        root = self.settings.deployment.data
-        with directory_fd(root) as root_fd:
-            fd = os.open(
-                ".worker.lock",
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-                0o600,
-                dir_fd=root_fd,
-            )
-            try:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    return
+        with queue_lock(self.settings.deployment.data) as locked:
+            if locked:
                 self._tick_locked(stop)
-            finally:
-                os.close(fd)
 
     def _tick_locked(self, stop):
         with self.db() as session:
@@ -94,6 +80,9 @@ class Worker:
             with self.db() as session:
                 job = session.get(Job, job_id)
                 if job is None or job.status not in ACTIVE:
+                    continue
+                if job.status == DELETING:
+                    finish_deletion(session, job, self.settings.deployment)
                     continue
                 try:
                     self.process(session, job, self.settings.get(session))
@@ -237,14 +226,9 @@ class Worker:
                     )
                 job.status = "submitting"
                 return None
-            if not job.magnet:
-                raise NeedsReview(
-                    "This hash is absent from qBittorrent. Provide a full magnet with trackers or add the torrent there, then retry.",
-                    "hash",
-                )
             job.status, job.submission_at = "submitting", time.time()
             session.commit()
-            client.add(job.magnet, tag)
+            client.add(job.magnet or f"magnet:?xt=urn:btih:{job.info_hash}", tag)
             return None
         tags = {part.strip() for part in str(torrent.get("tags", "")).split(",")}
         if not job.torrent_seen and not job.use_existing and tag not in tags and job.magnet:
@@ -257,6 +241,8 @@ class Worker:
         job.detail = "qBittorrent: " + (
             state if state.isascii() and state.isalpha() and len(state) <= 30 else "unknown state"
         )
+        if not job.magnet and tag in tags and state in {"metaDL", "forcedMetaDL", "stalledDL"}:
+            job.detail = "Waiting for peers or torrent metadata. Check peer discovery and trackers in qBittorrent."
         if job.progress != 1 or state not in SEED_STATES:
             return None
         files = client.files(job.info_hash)

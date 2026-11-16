@@ -107,6 +107,7 @@ class FakeQBittorrent:
         self.categories = {}
         self.file_entries = {}
         self.adds = 0
+        self.submitted_magnets = []
         self.logins = 0
         self.requests = []
         self.break_after_add = False
@@ -150,6 +151,8 @@ class FakeQBittorrent:
             self.adds += 1
             assert b"\r\nmagnet:?xt=urn:btih:" in request.content
             assert b"\r\nshelfshuttle\r\n" in request.content
+            magnet = request.content.split(b'name="urls"\r\n\r\n')[1].split(b"\r\n")[0].decode()
+            self.submitted_magnets.append(magnet)
             tag = request.content.split(b'name="tags"\r\n\r\n')[1].split(b"\r\n")[0].decode()
             self.torrents[DIGEST] = torrent("metaDL", 0, tags=tag)
             if self.break_after_add:

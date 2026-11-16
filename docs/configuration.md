@@ -49,7 +49,7 @@ Choose your UID and GID before creating the named volumes. Docker initializes fr
 | `SHELFSHUTTLE_METADATA_PROVIDER` | `embedded` | Read metadata from uploaded and downloaded files. |
 | `SHELFSHUTTLE_DRY_RUN` | `false` | Validate sources and check for target conflicts without submitting torrents or publishing library files. Existing torrents can be inspected. Dry-run jobs retain their intake files and job records. |
 
-Use a dedicated category per ShelfShuttle deployment and a directory writable by qBittorrent. ShelfShuttle requests that path explicitly for new submissions. It leaves existing torrents and all downloads intact. A hash looks up a torrent already in qBittorrent. A full magnet can start a new download, subject to peers and trackers being available. The integration uses the [qBittorrent Web API](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29) and accepts the [session cookie used by recent versions](https://github.com/qbittorrent/qBittorrent/blob/v5_2_x/WebAPI_Changelog.md).
+Use a dedicated category per ShelfShuttle deployment and a directory writable by qBittorrent. ShelfShuttle requests that path explicitly for new submissions. A 40-character hex or 32-character base32 v1 hash tracks an existing torrent or starts a new one with a trackerless magnet. Completion depends on peer discovery and availability. Provide the full magnet when the torrent needs its trackers. The integration uses the [qBittorrent Web API](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29), accepts the [session cookie used by recent versions](https://github.com/qbittorrent/qBittorrent/blob/v5_2_x/WebAPI_Changelog.md), and uses the [BitTorrent magnet format](https://www.bittorrent.org/beps/bep_0009.html).
 
 ## API
 
@@ -61,6 +61,7 @@ Protected API routes accept the signed session cookie or a configured `Authoriza
 | `POST /api/jobs` | Submit multipart fields `format` (`audio`, `ebook`, `combined`), `author`, `title`, and the applicable `epub` file and/or `torrent`. Audio-only forms may also be URL encoded. |
 | `GET /api/jobs/{id}` | Retrieve job status, destinations, progress from 0 to 1, and extracted tags. |
 | `GET /api/jobs/{id}/cover` | Retrieve a sanitized JPEG cover when available. |
+| `DELETE /api/jobs/{id}` | Remove a queue job and its uploaded EPUB. Returns 204 on success or 409 when the worker is busy or a library import has started. qBittorrent downloads and library files stay in place. |
 | `POST /api/jobs/{id}/action` | Send JSON with `intent` set to `retry` or `approve`, optional `author` and `title` for review, and optional `torrent` to supply a full magnet with the original info hash. |
 | `GET /api/destinations` | Preview destination paths with query fields `format`, `author`, and `title`. |
 | `POST /api/epub/inspect` | Inspect a multipart `epub` and return suggested metadata. |

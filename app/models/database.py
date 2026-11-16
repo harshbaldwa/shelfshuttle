@@ -1,6 +1,8 @@
+import fcntl
 import os
 import stat
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import JSON, Float, String, Text, create_engine, event
@@ -45,6 +47,26 @@ class StoredSettings(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     values: Mapped[dict] = mapped_column(JSON)
+
+
+@contextmanager
+def queue_lock(path: Path):
+    with directory_fd(path) as root:
+        fd = os.open(
+            ".worker.lock",
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=root,
+        )
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+            else:
+                yield True
+        finally:
+            os.close(fd)
 
 
 def database(path: Path):

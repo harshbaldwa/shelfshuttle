@@ -56,8 +56,9 @@
         {% endfor %}
       </details>
       {% endif %}
-      {% if job.status in ('failed', 'review') %}
+      {% if job.status in ('failed', 'review') or job.can_delete %}
         <div class="job-actions">
+          {% if job.status in ('failed', 'review') %}
           <form method="post" action="/jobs/{{ job.id }}/action">
             <input type="hidden" name="_csrf" value="{{ csrf }}">
             <button name="intent" value="retry" class="button secondary small">Retry</button>
@@ -74,6 +75,17 @@
               <label>Author <input name="author" value="{{ job.author }}" maxlength="200" required></label>
               {% endif %}
               <button name="intent" value="approve" class="button primary small">{{ 'Use existing torrent' if job.review_kind == 'duplicate' else 'Confirm and retry' }}</button>
+            </form>
+          </details>
+          {% endif %}
+          {% endif %}
+          {% if job.can_delete %}
+          <details class="review-form">
+            <summary>{{ 'Retry deletion' if job.status == 'deleting' else 'Delete from queue' }}</summary>
+            <form method="post" action="/jobs/{{ job.id }}/action" class="fields">
+              <input type="hidden" name="_csrf" value="{{ csrf }}">
+              <p>{% if job.format != 'audio' %}This deletes the uploaded EPUB from intake. {% endif %}Library files and qBittorrent downloads stay in place.</p>
+              <button name="intent" value="delete" class="button danger small">Confirm deletion</button>
             </form>
           </details>
           {% endif %}

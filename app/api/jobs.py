@@ -6,11 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from starlette.datastructures import UploadFile
 
 from app.core.paths import describe_filesystem_error
-from app.models.database import Job
+from app.models.database import Job, queue_lock
 from app.services.importing import destinations
 from app.services.intake import discard_upload, inspect_upload, receive_upload, save_cover
 from app.services.metadata import PROVIDERS
 from app.services.qbittorrent import torrent_input
+from app.services.queue import DELETING, can_delete, finish_deletion
 
 FORMATS = {"combined": "Audiobook + ebook", "audio": "Audiobook", "ebook": "Ebook"}
 STATUS = {
@@ -18,6 +19,7 @@ STATUS = {
     "submitting": "Submitting",
     "downloading": "Downloading",
     "importing": "Importing",
+    DELETING: "Deleting",
     "complete": "Imported",
     "dry_run": "Dry run",
     "failed": "Failed",
@@ -46,6 +48,7 @@ def public_job(job: Job) -> dict:
         "dry_run": job.dry_run,
         "review_kind": job.review_kind,
         "prepared": bool(job.prepared),
+        "can_delete": can_delete(job),
         "created_at": job.created_at,
         "cover_url": f"/api/jobs/{job.id}/cover" if job.cover else None,
     }
@@ -194,3 +197,19 @@ def change_job(runtime, job_id, payload):
         job.status, job.detail, job.review_kind = "queued", None, None
         session.commit()
         return public_job(job)
+
+
+def delete_job(runtime, job_id: str) -> None:
+    with queue_lock(runtime.deployment.data) as locked:
+        if not locked:
+            raise HTTPException(409, "The queue worker is busy. Try deleting again in a moment.")
+        with runtime.db() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            job = get_job(session, job_id)
+            if not can_delete(job):
+                raise HTTPException(409, "This job has started or completed a library import.")
+            job.status, job.detail = DELETING, None
+            # Record the intent before deleting files so the worker can finish after a restart.
+            session.commit()
+            if detail := finish_deletion(session, job, runtime.deployment):
+                raise HTTPException(409, detail)
