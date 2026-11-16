@@ -51,7 +51,7 @@ def destinations(settings: Settings, kind: str, author: str, title: str) -> dict
     result = {}
     if kind in {"audio", "combined"}:
         result["audio"] = str(settings.audiobook_library / relative)
-    if kind in {"ebook", "combined"}:
+    if kind == "ebook":
         result["ebook"] = str(settings.ebook_library / relative)
     return result
 

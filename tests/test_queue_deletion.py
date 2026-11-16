@@ -111,10 +111,9 @@ def test_failed_publish_shows_delete_and_exact_filesystem_error(rig, monkeypatch
     assert not destination.exists()
 
 
-def test_delete_preserves_published_half_of_failed_pairing(rig, monkeypatch):
+def test_delete_preserves_published_half_of_legacy_pair(rig, monkeypatch, legacy_pair_routing):
     audio = write_audio(rig.downloads / "Orbit.m4b")
     rig.fake.complete(rig.downloads, [audio])
-    job = rig.submit("combined").json()
     original_rename = importing._rename_exclusive
 
     def reject_second_publish(src_fd, name, dest_fd, dest_name):
@@ -123,7 +122,9 @@ def test_delete_preserves_published_half_of_failed_pairing(rig, monkeypatch):
         original_rename(src_fd, name, dest_fd, dest_name)
 
     monkeypatch.setattr(importing, "_rename_exclusive", reject_second_publish)
-    rig.tick()
+    with legacy_pair_routing():
+        job = rig.submit("combined").json()
+        rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "failed" and result["prepared"], result
     published = Path(job["destinations"]["audio"])

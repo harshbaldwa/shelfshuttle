@@ -1,5 +1,6 @@
 import base64
 import io
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
@@ -195,6 +196,28 @@ def torrent(state, progress, **extra):
         "progress": progress,
         **extra,
     }
+
+
+@pytest.fixture
+def legacy_pair_routing(monkeypatch):
+    from app.api import jobs
+    from app.services.importing import destinations
+    from app.workers import worker
+
+    def previous_destinations(settings, kind, author, title):
+        paths = destinations(settings, kind, author, title)
+        if kind == "combined":
+            paths.update(destinations(settings, "ebook", author, title))
+        return paths
+
+    @contextmanager
+    def use_legacy_routing():
+        with monkeypatch.context() as patch:
+            patch.setattr(jobs, "destinations", previous_destinations)
+            patch.setattr(worker, "destinations", previous_destinations)
+            yield
+
+    return use_legacy_routing
 
 
 @pytest.fixture

@@ -101,7 +101,17 @@ def test_add_book_form_imports_pair_with_misordered_epub_marker(rig):
     rig.tick()
     (job,) = client.get("/api/jobs", headers=AUTH).json()
     assert job["status"] == "complete", job
-    assert all((Path(path) / "Orbit.epub").is_file() for path in job["destinations"].values())
+    preview = client.get(
+        "/api/destinations",
+        params={"format": "combined", "author": "Ada Reed", "title": "A Small Orbit"},
+    )
+    folder = rig.deployment.audiobook_mount / "library" / "Ada Reed" / "A Small Orbit"
+    assert preview.json() == job["destinations"] == {"audio": str(folder)}
+    assert sorted(file.name for file in Path(job["destinations"]["audio"]).iterdir()) == [
+        "Orbit.epub",
+        "Orbit.m4b",
+    ]
+    assert not rig.deployment.ebook_mount.exists()
 
 
 def test_password_is_encrypted_and_environment_values_are_read_only(rig):

@@ -36,10 +36,10 @@ After changing container library paths, recreate the ShelfShuttle container. Ret
 
 - **Metadata differs.** Inspect the embedded metadata and confirm or edit the author and title.
 - **Destination already exists.** Keep the existing folder, choose a distinct name for an unprepared job, or resolve the conflict elsewhere and retry. The app never merges an existing book directory.
-- **Prepared files are missing or changed.** Restore the recorded staging directory or published destination from the same filesystem. If the process published the first half of a pairing and a second destination conflicts, resolve the conflict and retry.
+- **Prepared files are missing or changed.** Restore the recorded staging directory or published destination from the same filesystem. For an older job with two recorded destinations, resolve any remaining destination conflict and retry.
 - **Multiple M4Bs or mixed formats.** Select one M4B or the appropriate MP3 tracks in qBittorrent and retry.
 
-Use **Delete from queue** on a failed or queued job. Confirm to remove the job, its uploaded EPUB, and any matching unpublished staging directories. If a combined import already published one destination, its library files stay in place. If cleanup is interrupted, the worker retries it when it resumes.
+Use **Delete from queue** on a failed or queued job. Confirm to remove the job, its uploaded EPUB, and any matching unpublished staging directories. If cleanup is interrupted, the worker retries it when it resumes.
 
 ## How should I back up and update the app?
 

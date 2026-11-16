@@ -45,14 +45,19 @@ if (form) {
       return;
     }
     previewRequest = new AbortController();
-    const params = new URLSearchParams({ author, title, format: controls.format.value });
+    const format = controls.format.value;
+    const params = new URLSearchParams({ author, title, format });
+    const labels = {
+      audio: format === "combined" ? "Audiobook library (both files)" : "Audiobook library",
+      ebook: "Ebook library",
+    };
     try {
       const response = await fetch("/api/destinations?" + params, { signal: previewRequest.signal });
       if (!response.ok) throw new Error();
       const paths = await response.json();
       const list = document.createElement("dl");
       for (const [target, path] of Object.entries(paths)) {
-        list.append(text("dt", target === "audio" ? "Audiobook library" : "Ebook library"));
+        list.append(text("dt", labels[target]));
         const value = document.createElement("dd");
         value.append(text("code", path));
         list.append(value);

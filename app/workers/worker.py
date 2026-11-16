@@ -128,9 +128,17 @@ class Worker:
             return
         current = destinations(settings, job.format, job.author, job.title)
         if current != job.destinations:
-            raise NeedsReview(
-                "Library settings changed. Confirm the updated destinations.", "settings"
-            )
+            # Unprepared jobs from older releases can drop their extra ebook destination.
+            if (
+                job.format == "combined"
+                and set(job.destinations) == {"audio", "ebook"}
+                and current == {"audio": job.destinations["audio"]}
+            ):
+                job.destinations = current
+            else:
+                raise NeedsReview(
+                    "Library settings changed. Confirm the updated destinations.", "settings"
+                )
         dry_run = job.dry_run or settings.dry_run
         audio = []
         if job.info_hash:

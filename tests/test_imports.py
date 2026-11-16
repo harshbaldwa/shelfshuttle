@@ -82,10 +82,11 @@ def test_multiple_mp3_natural_order_and_disc_folders(rig):
         ).is_file()
 
 
-def test_combined_and_recovery_after_first_atomic_rename(rig, monkeypatch):
+def test_legacy_prepared_pair_recovers_after_first_atomic_rename(
+    rig, monkeypatch, legacy_pair_routing
+):
     audio = write_audio(rig.downloads / "Original.m4b")
     rig.fake.complete(rig.downloads, [audio])
-    job = submit(rig, "combined")
     rename = importing._rename_exclusive
 
     def crash(*args):
@@ -93,8 +94,10 @@ def test_combined_and_recovery_after_first_atomic_rename(rig, monkeypatch):
         raise SystemExit("Power loss immediately after publishing the first target")
 
     monkeypatch.setattr(importing, "_rename_exclusive", crash)
-    with pytest.raises(SystemExit):
-        rig.tick()
+    with legacy_pair_routing():
+        job = submit(rig, "combined")
+        with pytest.raises(SystemExit):
+            rig.tick()
     book = Path(job["destinations"]["audio"])
     first_inode = book.stat().st_ino
     assert (book / "Orbit.epub").exists()
@@ -112,6 +115,20 @@ def test_combined_and_recovery_after_first_atomic_rename(rig, monkeypatch):
     assert book.stat().st_ino == first_inode
     assert (book / "Original.m4b").read_bytes() == audio.read_bytes()
     assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").exists()
+
+
+def test_queued_legacy_pair_routes_only_to_audiobook_library(rig, legacy_pair_routing):
+    audio = write_audio(rig.downloads / "Original.m4b")
+    rig.fake.complete(rig.downloads, [audio])
+    with legacy_pair_routing():
+        job = submit(rig, "combined")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert result["destinations"] == {"audio": job["destinations"]["audio"]}
+    folder = Path(result["destinations"]["audio"])
+    assert sorted(entry.name for entry in folder.iterdir()) == ["Orbit.epub", "Original.m4b"]
+    assert not Path(job["destinations"]["ebook"]).exists()
 
 
 def test_stale_stage_rebuilt_after_preparation_crash(rig, monkeypatch):

@@ -40,7 +40,7 @@ Choose your UID and GID before creating the named volumes. Docker initializes fr
 | `SHELFSHUTTLE_INTAKE_ROOT` | Intake mount root | Directory for received EPUBs. |
 | `SHELFSHUTTLE_AUDIOBOOK_LIBRARY` | `<audiobook mount>/library` | Audiobook library watched by your media app. |
 | `SHELFSHUTTLE_AUDIOBOOK_STAGING` | `<audiobook mount>/.shelfshuttle` | Staging sibling on the same mount as the audiobook library. |
-| `SHELFSHUTTLE_EBOOK_LIBRARY` | `<ebook mount>/library` | Ebook library watched by your media app. |
+| `SHELFSHUTTLE_EBOOK_LIBRARY` | `<ebook mount>/library` | Destination for ebook-only jobs. |
 | `SHELFSHUTTLE_EBOOK_STAGING` | `<ebook mount>/.shelfshuttle` | Staging sibling on the same mount as the ebook library. |
 | `SHELFSHUTTLE_FOLDER_TEMPLATE` | `{author}/{title}` | Relative folder template with both fields. For example, `{author} - {title}`. |
 | `SHELFSHUTTLE_FILE_MODE`, `SHELFSHUTTLE_DIRECTORY_MODE` | `0644`, `0755` | Permissions for new media files and folders. |
@@ -48,6 +48,8 @@ Choose your UID and GID before creating the named volumes. Docker initializes fr
 | `SHELFSHUTTLE_POLL_SECONDS` | `5` | Delay between worker polling cycles, from 2 to 300 seconds. |
 | `SHELFSHUTTLE_METADATA_PROVIDER` | `embedded` | Read metadata from uploaded and downloaded files. |
 | `SHELFSHUTTLE_DRY_RUN` | `false` | Validate sources and check for target conflicts without submitting torrents or publishing library files. Existing torrents can be inspected. Dry-run jobs retain their intake files and job records. |
+
+For `combined` jobs, the audiobook library and folder template determine a single book folder containing the audio and the uploaded EPUB. Ebook-only jobs use the ebook library.
 
 Use a dedicated category per ShelfShuttle deployment and a directory writable by qBittorrent. ShelfShuttle requests that path explicitly for new submissions. A 40-character hex or 32-character base32 v1 hash tracks an existing torrent or starts a new one with a trackerless magnet. Completion depends on peer discovery and availability. Provide the full magnet when the torrent needs its trackers. The integration uses the [qBittorrent Web API](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29), accepts the [session cookie used by recent versions](https://github.com/qbittorrent/qBittorrent/blob/v5_2_x/WebAPI_Changelog.md), and uses the [BitTorrent magnet format](https://www.bittorrent.org/beps/bep_0009.html).
 
