@@ -97,14 +97,13 @@ def test_failed_publish_shows_delete_and_exact_filesystem_error(rig, monkeypatch
     stage = rig.deployment.ebook_mount / ".shelfshuttle" / f"{job['id']}-ebook"
 
     def rejected_rename(*args):
-        raise OSError(errno.EINVAL, "invalid argument")
+        raise OSError(errno.EIO, "input/output error")
 
     monkeypatch.setattr(importing, "_rename_exclusive", rejected_rename)
     rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "failed" and result["prepared"], result
-    assert f"Publishing library directory at {destination} failed (EINVAL)" in result["detail"]
-    assert "no-replace renames" in result["detail"]
+    assert f"Publishing library directory at {destination} failed (EIO)" in result["detail"]
     assert stage.is_dir()
     assert "Delete from queue" in sign_in(rig.client).text
     assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204

@@ -357,6 +357,103 @@ def test_unsupported_directory_sync_still_imports(rig, monkeypatch):
     assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").is_file()
 
 
+@pytest.mark.parametrize("code", [errno.EINVAL, errno.ENOTSUP])
+def test_retry_prepared_import_when_mount_cannot_rename_exclusively(rig, monkeypatch, code):
+    def fail_rename(*args):
+        raise OSError(errno.EIO, "I/O error")
+
+    job = submit(rig)
+    monkeypatch.setattr(importing, "_rename_exclusive", fail_rename)
+    rig.tick()
+    failed = get_job(rig, job["id"])
+    assert failed["status"] == "failed" and failed["prepared"]
+    stage = rig.deployment.ebook_mount / ".shelfshuttle" / f"{job['id']}-ebook"
+    expected = (stage / "Orbit.epub").read_bytes()
+
+    def unsupported(*args):
+        raise OSError(code, "Unsupported rename")
+
+    monkeypatch.setattr(importing, "_rename_exclusive", unsupported)
+    action(rig, job["id"])
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").read_bytes() == expected
+    assert not stage.exists()
+
+
+def test_exclusive_copy_rejects_directory_created_during_publish(rig, monkeypatch):
+    job = submit(rig)
+    destination = Path(job["destinations"]["ebook"])
+
+    def appear_before_fallback(*args):
+        destination.mkdir()
+        (destination / "existing.epub").write_bytes(b"existing data")
+        raise OSError(errno.EINVAL, "Unsupported rename")
+
+    monkeypatch.setattr(importing, "_rename_exclusive", appear_before_fallback)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "review"
+    assert [file.name for file in destination.iterdir()] == ["existing.epub"]
+    assert (destination / "existing.epub").read_bytes() == b"existing data"
+
+
+def test_exclusive_copy_does_not_overwrite_a_file_in_the_reserved_directory(rig, monkeypatch):
+    job = submit(rig)
+    destination = Path(job["destinations"]["ebook"]) / "Orbit.epub"
+    copy_staged_file = importing._copy_staged_file
+
+    def unsupported(*args):
+        raise OSError(errno.EINVAL, "Unsupported rename")
+
+    def introduce_file(*args):
+        destination.write_bytes(b"existing data")
+        copy_staged_file(*args)
+
+    monkeypatch.setattr(importing, "_rename_exclusive", unsupported)
+    monkeypatch.setattr(importing, "_copy_staged_file", introduce_file)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "review" and "already exists" in result["detail"]
+    assert destination.read_bytes() == b"existing data"
+
+
+def test_exclusive_copy_resumes_partial_mp3_after_restart(rig, monkeypatch):
+    paths = [
+        write_audio(rig.downloads / "Torrent" / disc / "01.mp3") for disc in ("Disc 1", "Disc 2")
+    ]
+    rig.fake.complete(rig.downloads, paths)
+    job = submit(rig, "audio")
+    copy = importing.shutil.copyfileobj
+
+    def unsupported(*args):
+        def interrupt(source, destination, length):
+            destination.write(source.read(128))
+            raise OSError(errno.EIO, "Interrupted file copy")
+
+        monkeypatch.setattr(importing.shutil, "copyfileobj", interrupt)
+        raise OSError(errno.EINVAL, "Unsupported rename")
+
+    monkeypatch.setattr(importing, "_rename_exclusive", unsupported)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed" and "Copying library file" in result["detail"]
+    destination = Path(job["destinations"]["audio"])
+    [partial] = destination.glob("*/*.mp3")
+    assert partial.stat().st_size == 128
+    original_inode = partial.stat().st_ino
+    monkeypatch.setattr(importing.shutil, "copyfileobj", copy)
+    action(rig, job["id"])
+    app = rig.app_factory()
+    with TestClient(app) as client:
+        app.state.worker.tick()
+        result = client.get(f"/api/jobs/{job['id']}", headers=AUTH).json()
+        assert result["status"] == "complete", result
+    assert partial.stat().st_ino == original_inode
+    for path in paths:
+        assert (destination / path.parent.name / path.name).read_bytes() == path.read_bytes()
+
+
 @pytest.mark.parametrize(
     "raw",
     [

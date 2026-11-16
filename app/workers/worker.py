@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.paths import UnsafePath, describe_filesystem_error, regular_file
 from app.models.database import Job, queue_lock
@@ -123,8 +124,7 @@ class Worker:
                     raise NeedsReview(
                         "Restore the library mounts used to prepare this import.", "settings"
                     )
-            finish_targets(job.prepared)
-            job.status = "complete"
+            self._finish_import(session, job)
             return
         current = destinations(settings, job.format, job.author, job.title)
         if current != job.destinations:
@@ -190,8 +190,18 @@ class Worker:
             job.detail = "Validation passed. No library files were written."
             return
         job.prepared = stage_targets(job.id, settings, current, groups)
+        self._finish_import(session, job)
+
+    @staticmethod
+    def _finish_import(session, job):
+        job.status = "importing"
         session.commit()
-        finish_targets(job.prepared)
+
+        def checkpoint():
+            flag_modified(job, "prepared")
+            session.commit()
+
+        finish_targets(job.prepared, checkpoint)
         job.status = "complete"
 
     @staticmethod

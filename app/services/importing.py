@@ -5,7 +5,7 @@ import re
 import shutil
 import stat
 import sys
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -110,7 +110,7 @@ def tracked_audio(
 
 
 def _rename_exclusive(src_fd: int, src: str, dest_fd: int, dest: str) -> None:
-    """Use the kernel's atomic no-replace primitive or fail closed."""
+    """Use the kernel's atomic no-replace primitive."""
     libc = ctypes.CDLL(None, use_errno=True)
     symbol, flag = ("renameatx_np", 4) if sys.platform == "darwin" else ("renameat2", 1)
     rename = getattr(libc, symbol, None)
@@ -253,7 +253,7 @@ def stage_targets(job_id: str, settings: Settings, target_paths: dict, source_gr
     return prepared
 
 
-def finish_targets(plan: dict) -> None:
+def finish_targets(plan: dict, checkpoint) -> None:
     # Check every target before publishing any additional directories.
     with ExitStack() as stack:
         entries = []
@@ -263,27 +263,196 @@ def finish_targets(plan: dict) -> None:
             dest_fd = stack.enter_context(directory_fd(dest.parent))
             expected = item["identity"]
             current = _entry(dest_fd, dest.name)
-            if current is not None:
+            fallback = item.get("fallback")
+            if fallback:
+                if _identity(current) != fallback["directories"][""]:
+                    raise NeedsReview(f"The reserved destination has changed: {dest}")
+            elif current is not None:
                 if _identity(current) != expected:
                     raise NeedsReview(f"The destination already exists: {dest}")
                 sync_directory(dest_fd, dest.parent)
                 continue
-            stage_fd = stack.enter_context(directory_fd(stage.parent))
-            if _identity(_entry(stage_fd, stage.name)) != expected:
+            try:
+                stage_fd = stack.enter_context(directory_fd(stage.parent))
+            except FileNotFoundError:
+                if fallback and fallback.get("complete"):
+                    continue
+                raise
+            if not (fallback and fallback.get("complete")) and (
+                _identity(_entry(stage_fd, stage.name)) != expected
+            ):
                 raise NeedsReview(
                     "Prepared files are missing or changed. Restore the staging directory."
                 )
-            entries.append((stage_fd, stage, dest_fd, dest))
-        for stage_fd, stage, dest_fd, dest in entries:
+            entries.append((stage_fd, stage, dest_fd, dest, item))
+        for stage_fd, stage, dest_fd, dest, item in entries:
             with filesystem_step("Publishing library directory", dest):
-                try:
-                    _rename_exclusive(stage_fd, stage.name, dest_fd, dest.name)
-                except OSError as exc:
-                    if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
-                        raise NeedsReview(f"The destination already exists: {dest}") from exc
-                    raise
+                if not item.get("fallback"):
+                    try:
+                        _rename_exclusive(stage_fd, stage.name, dest_fd, dest.name)
+                    except OSError as exc:
+                        if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                            raise NeedsReview(f"The destination already exists: {dest}") from exc
+                        if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}:
+                            raise
+                    else:
+                        sync_directory(dest_fd, dest.parent)
+                        sync_directory(stage_fd, stage.parent)
+                        continue
+                _publish_by_copy(stage_fd, stage, dest_fd, dest, item, checkpoint)
+
+
+@contextmanager
+def _reserved_directory(parent_fd, name, path, key, directories, checkpoint):
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    with filesystem_step("Reserving library directory", path):
+        expected = directories.get(key)
+        if expected is None:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+            except FileExistsError as exc:
+                raise NeedsReview(f"The destination already exists: {path}") from exc
+        fd = os.open(name, flags, dir_fd=parent_fd)
+        try:
+            identity = _identity(os.fstat(fd))
+            if expected is None:
+                if os.listdir(fd):
+                    raise NeedsReview(f"The reserved destination is no longer empty: {path}")
+                sync_directory(parent_fd, path.parent)
+                directories[key] = identity
+                checkpoint()
+            elif identity != expected:
+                raise NeedsReview(f"The reserved destination has changed: {path}")
+            yield fd
+            if _identity(_entry(parent_fd, name)) != identity:
+                raise NeedsReview(f"The reserved destination has changed: {path}")
+        finally:
+            os.close(fd)
+
+
+def _publish_by_copy(stage_fd, stage, dest_fd, dest, item, checkpoint):
+    fallback = item.get("fallback")
+    if fallback is None:
+        fallback = item["fallback"] = {"directories": {}, "files": {}}
+    if not fallback.get("complete"):
+        _private_stage(stage_fd)
+        with (
+            directory_fd(stage) as source_fd,
+            _reserved_directory(
+                dest_fd, dest.name, dest, "", fallback["directories"], checkpoint
+            ) as book_fd,
+        ):
+            if _identity(os.fstat(source_fd)) != item["identity"]:
+                raise NeedsReview(f"The prepared files have changed: {stage}")
+            _copy_staged_directory(source_fd, book_fd, dest, Path(), fallback, checkpoint)
             sync_directory(dest_fd, dest.parent)
-            sync_directory(stage_fd, stage.parent)
+        fallback["complete"] = True
+        checkpoint()
+    if _identity(_entry(stage_fd, stage.name)) == item["identity"]:
+        _private_stage(stage_fd)
+        with filesystem_step("Removing staged directory", stage):
+            shutil.rmtree(stage.name, dir_fd=stage_fd)
+        sync_directory(stage_fd, stage.parent)
+
+
+def _copy_staged_directory(source_fd, dest_fd, dest, relative, fallback, checkpoint):
+    with os.scandir(source_fd) as entries:
+        for entry in entries:
+            name = entry.name
+            child = relative / name
+            path = dest / child
+            if entry.is_dir(follow_symlinks=False):
+                with filesystem_step("Reading staged directory", path):
+                    child_fd = os.open(
+                        name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=source_fd
+                    )
+                try:
+                    with _reserved_directory(
+                        dest_fd, name, path, child.as_posix(), fallback["directories"], checkpoint
+                    ) as target_fd:
+                        _copy_staged_directory(
+                            child_fd, target_fd, dest, child, fallback, checkpoint
+                        )
+                finally:
+                    os.close(child_fd)
+            elif entry.is_file(follow_symlinks=False):
+                with filesystem_step("Copying library file", path):
+                    _copy_staged_file(
+                        source_fd,
+                        dest_fd,
+                        name,
+                        path,
+                        child.as_posix(),
+                        fallback["files"],
+                        checkpoint,
+                    )
+            else:
+                raise UnsafePath("The staging directory contains an unsupported entry.")
+    attributes = os.fstat(source_fd)
+    with filesystem_step("Setting directory permissions", dest / relative):
+        set_permissions(
+            dest_fd, stat.S_IMODE(attributes.st_mode), (attributes.st_uid, attributes.st_gid)
+        )
+    sync_directory(dest_fd, dest / relative)
+
+
+def _copy_staged_file(source_fd, dest_fd, name, path, key, files, checkpoint):
+    flags = os.O_NOFOLLOW | os.O_NONBLOCK
+    source = os.open(name, os.O_RDONLY | flags, dir_fd=source_fd)
+    with os.fdopen(source, "rb") as original:
+        attributes = os.fstat(source)
+        if not stat.S_ISREG(attributes.st_mode):
+            raise UnsafePath("A staged source must be a regular file.")
+        expected = files.get(key)
+        flags |= os.O_RDWR | os.O_APPEND
+        if expected is None:
+            try:
+                fd = os.open(name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dest_fd)
+            except FileExistsError as exc:
+                raise NeedsReview(f"The destination file already exists: {path}") from exc
+        else:
+            try:
+                fd = os.open(name, flags, dir_fd=dest_fd)
+            except FileNotFoundError as exc:
+                raise NeedsReview(f"The reserved destination file is missing: {path}") from exc
+        with os.fdopen(fd, "r+b") as output:
+            current = os.fstat(fd)
+            identity = [current.st_dev, current.st_ino]
+            if expected is None:
+                sync_directory(dest_fd, path.parent)
+                files[key] = identity
+                checkpoint()
+            if (
+                files[key] != identity
+                or not stat.S_ISREG(current.st_mode)
+                or current.st_nlink != 1
+                or current.st_size > attributes.st_size
+            ):
+                raise NeedsReview(f"The reserved destination file has changed: {path}")
+            remaining = current.st_size
+            while remaining:
+                count = min(remaining, 1024**2)
+                chunk = output.read(count)
+                if len(chunk) != count or chunk != original.read(count):
+                    raise NeedsReview(f"The reserved destination file has changed: {path}")
+                remaining -= count
+            output.seek(0, os.SEEK_END)
+            if output.tell() != current.st_size:
+                raise NeedsReview(f"The reserved destination file has changed: {path}")
+            shutil.copyfileobj(original, output, 1024**2)
+            output.flush()
+            published = _entry(dest_fd, name)
+            if (
+                published is None
+                or [published.st_dev, published.st_ino] != identity
+                or published.st_size != attributes.st_size
+            ):
+                raise NeedsReview(f"The reserved destination file has changed: {path}")
+            set_permissions(
+                fd, stat.S_IMODE(attributes.st_mode), (attributes.st_uid, attributes.st_gid)
+            )
+            os.fsync(fd)
+            sync_directory(dest_fd, path.parent)
 
 
 def discard_prepared(plan: dict, job_id: str, deployment: Deployment) -> None:
