@@ -28,6 +28,11 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        state: [named, bind]
+    env:
+      SHELFSHUTTLE_DATA_SOURCE: ${{ matrix.state == 'bind' && './data' || 'data' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,12 +41,16 @@ jobs:
         run: |
           umask 077
           cp .env.example .env
+          if [ "$SHELFSHUTTLE_DATA_SOURCE" != data ]; then
+            test ! -e "$SHELFSHUTTLE_DATA_SOURCE"
+          fi
           docker compose up --detach --build --wait --wait-timeout 90
       - name: Check health, volume access, and network exposure
         run: |
           test "$(docker inspect -f '{{len .HostConfig.PortBindings}}' "$(docker compose ps -q shelfshuttle)")" = 0
           docker compose exec -T shelfshuttle python -c 'import urllib.request; assert urllib.request.urlopen("http://127.0.0.1:8080/healthz", timeout=4).status == 200'
           docker compose exec -T shelfshuttle python -c 'import os; assert os.getuid() != 0; assert all(os.access(p, os.W_OK) for p in ("/app/data", "/app/intake", "/media/audiobooks", "/media/ebooks"))'
+          docker compose exec -T shelfshuttle python -c 'import os, stat; p = os.stat("/app/data"); assert p.st_uid == os.getuid() and p.st_gid == os.getgid() and stat.S_IMODE(p.st_mode) == 0o700; assert stat.S_IMODE(os.stat("/app/data/.key").st_mode) == 0o600'
       - if: failure()
         run: docker compose logs
       - if: always()

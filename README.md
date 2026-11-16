@@ -44,6 +44,8 @@ docker compose ps
 
 Point the proxy at `shelfshuttle:8080` and open the HTTPS hostname you configured. With Traefik and Keycloak, attach your existing Keycloak-backed middleware to the router for that hostname. Apply it to the UI and `/api/*`. The default named volumes persist state, intake files, and libraries across container recreation. To connect an existing download client or library, configure its mounts before importing. [Traefik middleware](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/overview/)
 
+Set `SHELFSHUTTLE_DATA_SOURCE=./data` in `.env` to keep state in a dedicated directory beside the Compose file. Compose creates the directory when needed and prepares its permissions before starting the non-root app. See the [custom Compose setup](docs/configuration.md#state-storage) if you maintain your own service definition.
+
 When upgrading from 0.1, configure proxy authentication and remove any custom host port mapping before replacing the container. You can remove the old ShelfShuttle admin and API credentials from `.env`.
 
 An example host layout gives each library a parent directory with a separate watched subdirectory and staging directory:
@@ -71,7 +73,7 @@ SHELFSHUTTLE_DOWNLOAD_ROOT=/downloads/books
 
 In this example both services see the same downloads under `/downloads/books`. The remote prefix is qBittorrent's view. The mapped download root is ShelfShuttle's view. Set the qBittorrent password in Settings or pass it through `SHELFSHUTTLE_QBIT_PASSWORD` or its `_FILE` variant. Save the settings and run **Test saved connection**. qBittorrent must already be reachable from ShelfShuttle. If it lives on an existing Docker network, attach ShelfShuttle with an override. Leave qBittorrent's Web UI authentication enabled.
 
-The proxy and qBittorrent can use separate networks. Set the process UID/GID to a host identity that already has the access needed for the mounted directories.
+The proxy and qBittorrent can use separate networks. Set the process UID/GID to a host identity with the access needed for the intake, downloads, and library mounts.
 
 ## Local development
 

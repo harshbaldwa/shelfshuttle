@@ -1,0 +1,25 @@
+# Apply after a custom Compose file to initialize its /app/data mount.
+services:
+  shelfshuttle:
+    depends_on:
+      shelfshuttle-state:
+        condition: service_completed_successfully
+
+  shelfshuttle-state:
+    build:
+      context: .
+      target: state-init
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    environment:
+      SHELFSHUTTLE_PUID: "${SHELFSHUTTLE_PUID:-10001}"
+      SHELFSHUTTLE_PGID: "${SHELFSHUTTLE_PGID:-10001}"
+    volumes:
+      - ${SHELFSHUTTLE_DATA_SOURCE:-data}:/app/data
+
+volumes:
+  data:

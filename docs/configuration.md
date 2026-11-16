@@ -17,12 +17,23 @@ All paths are paths inside ShelfShuttle unless identified as Compose source path
 | `SHELFSHUTTLE_EBOOK_MOUNT` | `/media/ebooks` | Allowed ebook library and staging mount root. |
 | `SHELFSHUTTLE_WORKER_ENABLED` | `true` | Run the background worker. With the worker disabled, the UI and API can still queue jobs. |
 | `SHELFSHUTTLE_PUID`, `SHELFSHUTTLE_PGID` | `10001`, `10001` | Build and run the Compose service with these non-root IDs. Use IDs that can access your bind mounts. |
-| `SHELFSHUTTLE_{DATA,INTAKE,DOWNLOADS,AUDIOBOOK,EBOOK}_SOURCE` | Corresponding named volume | Compose volume name or absolute host path. |
+| `SHELFSHUTTLE_{DATA,INTAKE,DOWNLOADS,AUDIOBOOK,EBOOK}_SOURCE` | Corresponding named volume | Compose volume name or host path beginning with `/`, `./`, or `../`. |
 | `SHELFSHUTTLE_PROXY_NETWORK` | Unset | Name of the existing external network when applying the proxy override. |
 
 Set `SHELFSHUTTLE_QBIT_PASSWORD_FILE` to a readable, mounted secret file if you prefer to supply the qBittorrent password that way. Remove the direct password variable before setting the file path.
 
-Choose your UID and GID before creating the named volumes. Docker initializes fresh volumes from the image. If you change IDs on an existing deployment, migrate ownership of its state and intake storage before starting the rebuilt service.
+### State storage
+
+Keep the `data` named volume or set `SHELFSHUTTLE_DATA_SOURCE=./data` in `.env`. The standard Compose file runs a one-shot `shelfshuttle-state` service before the app. It opens only the `/app/data` mount, gives the configured UID and GID ownership of the directory and recognized state files, and makes them private. The initializer has no network access. Use a dedicated directory on a local filesystem that allows normal Linux ownership and permissions.
+
+With your own `docker-compose.yaml`, keep the state mount `${SHELFSHUTTLE_DATA_SOURCE:-data}:/app/data` and apply the supplied override from the same directory as the Dockerfile. If you already have a running container, stop it before upgrading or changing UID/GID.
+
+```sh
+docker compose -f docker-compose.yaml -f compose.state.yaml stop shelfshuttle
+docker compose -f docker-compose.yaml -f compose.state.yaml up -d --build
+```
+
+Keep the same volume or bind source across upgrades to retain the queue and encrypted settings. Changing the source selects a different state directory. If you change UID/GID, ensure those IDs can still access the intake, downloads, and library mounts.
 
 ## Runtime settings
 

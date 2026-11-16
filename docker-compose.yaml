@@ -6,6 +6,9 @@ services:
         SHELFSHUTTLE_PUID: "${SHELFSHUTTLE_PUID:-10001}"
         SHELFSHUTTLE_PGID: "${SHELFSHUTTLE_PGID:-10001}"
     restart: unless-stopped
+    depends_on:
+      shelfshuttle-state:
+        condition: service_completed_successfully
     init: true
     user: "${SHELFSHUTTLE_PUID:-10001}:${SHELFSHUTTLE_PGID:-10001}"
     env_file:
@@ -23,6 +26,11 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=640m,mode=1777
+
+  shelfshuttle-state:
+    extends:
+      file: compose.state.yaml
+      service: shelfshuttle-state
 
 volumes:
   data:

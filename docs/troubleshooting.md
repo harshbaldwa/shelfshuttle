@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Startup reports a state directory permission error
+
+Use the standard Compose file or add [`compose.state.yaml`](configuration.md#state-storage) to your custom Compose command. `shelfshuttle-state` prepares `/app/data` before startup, including a Compose-created `./data`. Inspect its log with `docker compose logs shelfshuttle-state` using the same Compose files you started with. Permission errors from the initializer can indicate a read-only mount or a filesystem that prevents ownership changes. Use a dedicated state directory on a local filesystem.
+
 ## The browser says the request token expired
 
 Reload the page for a fresh token and confirm that the browser accepts cookies. Use the HTTPS hostname configured at your proxy. For loopback-only HTTP development, set `SHELFSHUTTLE_COOKIE_SECURE=false`. If the proxy keeps asking you to sign in, check its authentication middleware and identity provider.

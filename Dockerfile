@@ -1,4 +1,10 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
+
+FROM base AS state-init
+COPY app/core/prepare_state.py /usr/local/bin/prepare-state.py
+ENTRYPOINT ["python", "-I", "/usr/local/bin/prepare-state.py"]
+
+FROM base AS runtime
 ARG SHELFSHUTTLE_PUID=10001
 ARG SHELFSHUTTLE_PGID=10001
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOME=/app/data
