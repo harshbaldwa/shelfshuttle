@@ -55,7 +55,7 @@ def create_app(deployment=None, *, overrides=None, worker_client=None) -> FastAP
 
     app = FastAPI(
         title="ShelfShuttle",
-        version="0.1.4",
+        version="0.1.5",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

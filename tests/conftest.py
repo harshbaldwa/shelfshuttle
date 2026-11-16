@@ -122,6 +122,7 @@ class FakeQBittorrent:
         self.logins = 0
         self.requests = []
         self.break_after_add = False
+        self.add_response = None
         self.modern_auth = False
         self.expire_once = False
 
@@ -165,11 +166,13 @@ class FakeQBittorrent:
             magnet = request.content.split(b'name="urls"\r\n\r\n')[1].split(b"\r\n")[0].decode()
             self.submitted_magnets.append(magnet)
             tag = request.content.split(b'name="tags"\r\n\r\n')[1].split(b"\r\n")[0].decode()
-            self.torrents[DIGEST] = torrent("metaDL", 0, tags=tag)
+            response = self.add_response or httpx.Response(200, text="Ok.")
+            if response.is_success and response.text != "Fails.":
+                self.torrents[DIGEST] = torrent("metaDL", 0, tags=tag)
             if self.break_after_add:
                 self.break_after_add = False
                 raise httpx.ReadTimeout("Simulate uncertain submission.")
-            return httpx.Response(200, text="Ok.")
+            return response
         if action == "torrents/files":
             return httpx.Response(200, json=self.file_entries[request.url.params["hash"]])
         raise AssertionError(f"Unexpected qBittorrent request: {action}")

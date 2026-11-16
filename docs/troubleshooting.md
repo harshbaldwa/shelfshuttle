@@ -16,6 +16,8 @@ ShelfShuttle checks the ZIP and reads the EPUB package and its reading order. If
 
 A new download submitted with a bare v1 hash relies on peer discovery, such as DHT. Check qBittorrent for paused torrents, missing metadata, unavailable peers, or stalled trackers. If the download requires a tracker, add it in qBittorrent or provide the full magnet when creating the job. A submitted job waits for qBittorrent to list the torrent before offering a retry. For a magnet that matches an existing torrent, confirm that you want ShelfShuttle to monitor it.
 
+If a ShelfShuttle job says the submission failed while qBittorrent shows it downloading, use **Retry** on the existing job. ShelfShuttle checks for the same hash before submitting again.
+
 ## qBittorrent says complete but ShelfShuttle cannot read the files
 
 Compare qBittorrent's save path and the actual file path with both download mapping settings. For example, qBittorrent's `/srv/qbit/ready/Disc 1/01.mp3` maps to `/downloads/ready/Disc 1/01.mp3` when the remote prefix is `/srv/qbit` and the mapped directory is `/downloads`. The mapped mount must contain the downloaded files with read and directory traversal permissions for the container user. Symbolic links are rejected.

@@ -6,6 +6,7 @@ from base64 import b32encode
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
+import httpx
 import pytest
 from conftest import (
     AUTH,
@@ -21,6 +22,7 @@ from conftest import (
 from fastapi.testclient import TestClient
 
 from app.services import importing
+from app.services.qbittorrent import QBittorrent, TorrentError
 
 
 def submit(rig, *args, **kwargs):
@@ -169,6 +171,82 @@ def test_qbit_add_lost_response_recovers_and_tracks_real_progress(rig):
     assert rig.fake.logins >= 2
     assert rig.fake.requests.count(("POST", "torrents/createCategory")) == 1
     assert audio.is_file()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(
+            200,
+            json={
+                "success_count": 1,
+                "pending_count": 0,
+                "failure_count": 0,
+                "added_torrent_ids": [DIGEST],
+            },
+        ),
+        httpx.Response(
+            202,
+            json={
+                "success_count": 0,
+                "pending_count": 1,
+                "failure_count": 0,
+                "added_torrent_ids": [],
+            },
+        ),
+        httpx.Response(200, json={"unfamiliar": "response"}),
+        httpx.Response(204),
+    ],
+    ids=["json-success", "json-pending", "unknown-success", "legacy-empty"],
+)
+def test_add_response_tracks_accepted_torrent(rig, response):
+    rig.fake.add_response = response
+    job = submit(rig, "audio", magnet=DIGEST)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "submitting"
+    tag = rig.fake.torrents[DIGEST]["tags"]
+    rig.fake.torrents[DIGEST] = torrent("downloading", 0.016, tags=tag)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert (result["status"], result["progress"]) == ("downloading", 0.016)
+    audio = write_audio(rig.downloads / "Orbit.m4b")
+    rig.fake.complete(rig.downloads, [audio], tags=tag)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+    assert rig.fake.adds == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(200, text="Fails."), httpx.Response(409)],
+    ids=["legacy-failure", "http-conflict"],
+)
+def test_add_response_reports_rejection(rig, response):
+    rig.fake.add_response = response
+    job = submit(rig, "audio", magnet=DIGEST)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "failed"
+    assert DIGEST not in rig.fake.torrents
+
+
+def test_retry_attaches_to_torrent_after_older_client_reported_failure(rig, monkeypatch):
+    add = QBittorrent.add
+
+    def report_old_error(client, magnet, tag):
+        add(client, magnet, tag)
+        raise TorrentError("qBittorrent rejected the magnet submission.")
+
+    job = submit(rig, "audio", magnet=DIGEST)
+    with monkeypatch.context() as patch:
+        patch.setattr(QBittorrent, "add", report_old_error)
+        rig.tick()
+    assert get_job(rig, job["id"])["status"] == "failed"
+    rig.fake.torrents[DIGEST].update(state="downloading", progress=0.016)
+    action(rig, job["id"])
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert (result["status"], result["progress"]) == ("downloading", 0.016)
+    assert rig.fake.adds == 1
 
 
 @pytest.mark.parametrize("digest", [DIGEST.upper(), b32encode(bytes.fromhex(DIGEST)).decode()])

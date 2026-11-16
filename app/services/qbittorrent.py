@@ -60,7 +60,7 @@ class QBittorrent:
         self.settings = settings
         self.client = httpx.Client(
             base_url=settings.qbit_url + "/api/v2/",
-            headers={"Referer": settings.qbit_url + "/", "User-Agent": "ShelfShuttle/0.1.4"},
+            headers={"Referer": settings.qbit_url + "/", "User-Agent": "ShelfShuttle/0.1.5"},
             timeout=httpx.Timeout(10, connect=5),
             follow_redirects=False,
             trust_env=False,
@@ -162,8 +162,29 @@ class QBittorrent:
                 "autoTMM": (None, "false"),
             },
         )
-        if response.text.strip() not in {"Ok.", ""}:
+        body = response.text.strip()
+        if body in {"Ok.", ""}:
+            return
+        if body == "Fails.":
             raise TorrentError("qBittorrent rejected the magnet submission.")
+        # Web API 2.14+ reports the result as counts, including asynchronous acceptance.
+        try:
+            result = response.json()
+        except ValueError:
+            result = None
+        if isinstance(result, dict):
+            added, pending, failed = (
+                result.get(key) for key in ("success_count", "pending_count", "failure_count")
+            )
+            if all(type(count) is int and count >= 0 for count in (added, pending, failed)):
+                if added or pending:
+                    return
+                if failed:
+                    raise TorrentError("qBittorrent rejected the magnet submission.")
+        # A successful HTTP request may have queued the torrent even if its body is unfamiliar.
+        raise TorrentUnavailable(
+            "qBittorrent returned an unrecognized submission response. Checking for the torrent."
+        )
 
     def files(self, digest: str) -> list[dict]:
         files = self.data("torrents/files", list, hash=digest)
