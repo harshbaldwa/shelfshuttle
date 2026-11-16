@@ -84,7 +84,7 @@
             <summary>{{ 'Retry deletion' if job.status == 'deleting' else 'Delete from queue' }}</summary>
             <form method="post" action="/jobs/{{ job.id }}/action" class="fields">
               <input type="hidden" name="_csrf" value="{{ csrf }}">
-              <p>{% if job.format != 'audio' %}This deletes the uploaded EPUB from intake. {% endif %}Library files and qBittorrent downloads stay in place.</p>
+              <p>{% if job.format != 'audio' %}This deletes the uploaded EPUB from intake. {% endif %}{% if job.prepared %}It also removes unpublished staging files. {% endif %}Library files and qBittorrent downloads stay in place.</p>
               <button name="intent" value="delete" class="button danger small">Confirm deletion</button>
             </form>
           </details>

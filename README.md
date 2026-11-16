@@ -111,6 +111,6 @@ Tests generate synthetic content in temporary directories and use mocked qBittor
 - [Security reporting](SECURITY.md)
 - [MIT license](LICENSE)
 
-## Version 0.1.0 scope
+## Current scope
 
 This release targets a single admin and a single deployment using local SQLite storage. It ships an embedded metadata provider and an interface for future providers. The intake worker accepts BitTorrent v1 magnets and hashes, one EPUB per job, and either one M4B or a set of MP3s. Imports use copies to preserve seeding. Disk capacity and supported filesystem semantics determine whether atomic import is available.

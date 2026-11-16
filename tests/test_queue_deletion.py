@@ -2,11 +2,11 @@ import errno
 import re
 from pathlib import Path
 
-from conftest import AUTH, DIGEST, epub_bytes, get_job, torrent
+from conftest import AUTH, DIGEST, epub_bytes, get_job, torrent, write_audio
 from test_web import sign_in
 
 from app.models.database import queue_lock
-from app.services import queue
+from app.services import importing, queue
 
 
 def test_delete_through_dashboard_removes_upload_and_cover(rig):
@@ -89,3 +89,48 @@ def test_worker_finishes_deletion_after_cleanup_failure(rig, monkeypatch):
     assert rig.client.get(endpoint, headers=AUTH).status_code == 404
     assert not (rig.deployment.intake_mount / job["id"]).exists()
     assert not Path(job["destinations"]["ebook"]).exists()
+
+
+def test_failed_publish_shows_delete_and_exact_filesystem_error(rig, monkeypatch):
+    job = rig.submit().json()
+    destination = Path(job["destinations"]["ebook"])
+    stage = rig.deployment.ebook_mount / ".shelfshuttle" / f"{job['id']}-ebook"
+
+    def rejected_rename(*args):
+        raise OSError(errno.EINVAL, "invalid argument")
+
+    monkeypatch.setattr(importing, "_rename_exclusive", rejected_rename)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed" and result["prepared"], result
+    assert f"Publishing library directory at {destination} failed (EINVAL)" in result["detail"]
+    assert "no-replace renames" in result["detail"]
+    assert stage.is_dir()
+    assert "Delete from queue" in sign_in(rig.client).text
+    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204
+    assert not stage.exists()
+    assert not destination.exists()
+
+
+def test_delete_preserves_published_half_of_failed_pairing(rig, monkeypatch):
+    audio = write_audio(rig.downloads / "Orbit.m4b")
+    rig.fake.complete(rig.downloads, [audio])
+    job = rig.submit("combined").json()
+    original_rename = importing._rename_exclusive
+
+    def reject_second_publish(src_fd, name, dest_fd, dest_name):
+        if name.endswith("-ebook"):
+            raise OSError(errno.EIO, "input/output error")
+        original_rename(src_fd, name, dest_fd, dest_name)
+
+    monkeypatch.setattr(importing, "_rename_exclusive", reject_second_publish)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed" and result["prepared"], result
+    published = Path(job["destinations"]["audio"])
+    assert (published / "Orbit.epub").is_file()
+    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204
+    assert (published / "Orbit.epub").is_file()
+    assert (published / audio.name).read_bytes() == audio.read_bytes()
+    assert not Path(job["destinations"]["ebook"]).exists()
+    assert not (rig.deployment.ebook_mount / ".shelfshuttle" / f"{job['id']}-ebook").exists()

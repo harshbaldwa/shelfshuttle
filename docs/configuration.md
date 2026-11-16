@@ -61,7 +61,7 @@ Protected API routes accept the signed session cookie or a configured `Authoriza
 | `POST /api/jobs` | Submit multipart fields `format` (`audio`, `ebook`, `combined`), `author`, `title`, and the applicable `epub` file and/or `torrent`. Audio-only forms may also be URL encoded. |
 | `GET /api/jobs/{id}` | Retrieve job status, destinations, progress from 0 to 1, and extracted tags. |
 | `GET /api/jobs/{id}/cover` | Retrieve a sanitized JPEG cover when available. |
-| `DELETE /api/jobs/{id}` | Remove a queue job and its uploaded EPUB. Returns 204 on success or 409 when the worker is busy or a library import has started. qBittorrent downloads and library files stay in place. |
+| `DELETE /api/jobs/{id}` | Remove a queue job, its uploaded EPUB, and any matching unpublished staging directories. Returns 204 on success or 409 when the worker is busy or the job is currently importing or already completed. |
 | `POST /api/jobs/{id}/action` | Send JSON with `intent` set to `retry` or `approve`, optional `author` and `title` for review, and optional `torrent` to supply a full magnet with the original info hash. |
 | `GET /api/destinations` | Preview destination paths with query fields `format`, `author`, and `title`. |
 | `POST /api/epub/inspect` | Inspect a multipart `epub` and return suggested metadata. |

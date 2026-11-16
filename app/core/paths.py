@@ -1,3 +1,4 @@
+import errno
 import os
 import re
 import stat
@@ -9,6 +10,26 @@ from string import Formatter
 
 class UnsafePath(ValueError):
     pass
+
+
+@contextmanager
+def filesystem_step(operation: str, path: Path):
+    try:
+        yield
+    except OSError as exc:
+        if not hasattr(exc, "shelfshuttle_step"):
+            exc.shelfshuttle_step = (operation, path)
+        raise
+
+
+def sync_directory(fd: int, path: Path) -> None:
+    with filesystem_step("Syncing directory", path):
+        try:
+            os.fsync(fd)
+        except OSError as exc:
+            # Some mounted filesystems support regular-file sync but reject directory sync.
+            if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.ENOSYS}:
+                raise
 
 
 def absolute_path(value: str, kind=Path):
@@ -83,25 +104,32 @@ def directory_fd(path: Path, *, create: bool = False, mode: int = 0o755, owner=(
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open("/", flags)
     try:
+        current = Path("/")
         for part in path.parts[1:]:
+            parent = current
+            current /= part
             made = False
             try:
-                next_fd = os.open(part, flags, dir_fd=fd)
+                with filesystem_step("Opening directory", current):
+                    next_fd = os.open(part, flags, dir_fd=fd)
             except FileNotFoundError:
                 if not create:
                     raise
                 try:
-                    os.mkdir(part, mode | 0o700, dir_fd=fd)
+                    with filesystem_step("Creating directory", current):
+                        os.mkdir(part, mode | 0o700, dir_fd=fd)
                     made = True
-                    os.fsync(fd)
+                    sync_directory(fd, parent)
                 except FileExistsError:
                     pass
-                next_fd = os.open(part, flags, dir_fd=fd)
+                with filesystem_step("Opening directory", current):
+                    next_fd = os.open(part, flags, dir_fd=fd)
             os.close(fd)
             fd = next_fd
             if made:
-                set_permissions(fd, mode, owner)
-                os.fsync(fd)
+                with filesystem_step("Setting directory permissions", current):
+                    set_permissions(fd, mode, owner)
+                sync_directory(fd, current)
         yield fd
     finally:
         os.close(fd)
@@ -127,23 +155,30 @@ def regular_file(path: Path):
 
 
 def describe_filesystem_error(error: OSError) -> str:
-    import errno
+    step = getattr(error, "shelfshuttle_step", None)
+    code = errno.errorcode.get(error.errno, "unknown error")
+    prefix = f"{step[0]} at {step[1]} failed" if step else "Filesystem operation failed"
+    return f"{prefix} ({code}). {_filesystem_error_hint(error.errno, step)}"
 
-    if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+
+def _filesystem_error_hint(code, step) -> str:
+    if code in {errno.ELOOP, errno.ENOTDIR}:
         return "A filesystem path contains a symlink or a non-directory component."
-    if error.errno in {errno.EXDEV, errno.ENOTSUP, errno.ENOSYS}:
+    if code in {errno.EXDEV, errno.ENOTSUP, errno.ENOSYS} or (
+        code == errno.EINVAL and step and step[0] == "Publishing library directory"
+    ):
         return "Staging and library must share a mount that supports atomic, no-replace renames."
-    if error.errno == errno.EROFS:
+    if code == errno.EROFS:
         return (
             "A required path is on a read-only filesystem. "
             "In Docker, use one writable parent mount for each library and its staging directory."
         )
-    if error.errno in {errno.EACCES, errno.EPERM}:
+    if code in {errno.EACCES, errno.EPERM}:
         return "Filesystem access denied. Check mount permissions and configured UID/GID."
-    if error.errno == errno.ENOSPC:
+    if code in {errno.ENOSPC, errno.EDQUOT}:
         return "The filesystem has insufficient space for staging or application state."
-    if error.errno == errno.ENOENT:
+    if code == errno.ENOENT:
         return (
             "A configured directory or source file is missing. Check the mounts and path mapping."
         )
-    return "A filesystem operation failed. Check the configured mounts and available space."
+    return "Check the configured mounts and available space."

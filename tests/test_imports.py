@@ -337,6 +337,26 @@ def test_read_only_stage_reports_mount_layout(rig, monkeypatch):
     assert not Path(job["destinations"]["ebook"]).exists()
 
 
+def test_unsupported_directory_sync_still_imports(rig, monkeypatch):
+    job = submit(rig)
+    fsync = os.fsync
+    file_syncs = []
+
+    def reject_directory_sync(fd):
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            raise OSError(errno.EINVAL, "invalid argument")
+        file_syncs.append(info.st_size)
+        fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", reject_directory_sync)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert file_syncs and all(file_syncs)
+    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").is_file()
+
+
 @pytest.mark.parametrize(
     "raw",
     [

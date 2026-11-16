@@ -5,19 +5,21 @@ import re
 import shutil
 import stat
 import sys
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.core.config import Settings
+from app.core.config import Deployment, Settings
 from app.core.paths import (
     UnsafePath,
     absolute_path,
     book_folder,
     directory_fd,
+    filesystem_step,
     regular_file,
     relative_parts,
     set_permissions,
+    sync_directory,
 )
 from app.services.metadata import InvalidMedia
 
@@ -172,6 +174,15 @@ def _stage_root(path: Path):
     return directory_fd(path, create=True, mode=0o700)
 
 
+def _private_stage(fd: int) -> os.stat_result:
+    info = os.fstat(fd)
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise UnsafePath(
+            "The staging directory must be owned by ShelfShuttle and private to write."
+        )
+    return info
+
+
 def stage_targets(job_id: str, settings: Settings, target_paths: dict, source_groups: dict) -> dict:
     owner = (settings.owner_uid, settings.owner_gid)
     file_mode = int(settings.file_mode, 8)
@@ -191,11 +202,7 @@ def stage_targets(job_id: str, settings: Settings, target_paths: dict, source_gr
                 owner=owner,
             ) as dest_fd,
         ):
-            root_info = os.fstat(stage_fd)
-            if root_info.st_uid != os.geteuid() or root_info.st_mode & 0o022:
-                raise UnsafePath(
-                    "The staging directory must be owned by ShelfShuttle and private to write."
-                )
+            root_info = _private_stage(stage_fd)
             if root_info.st_dev != os.fstat(dest_fd).st_dev:
                 raise OSError(errno.EXDEV, "Staging must share the library filesystem")
             if _entry(dest_fd, dest.name) is not None:
@@ -203,13 +210,15 @@ def stage_targets(job_id: str, settings: Settings, target_paths: dict, source_gr
             if _entry(stage_fd, label) is not None:
                 # An earlier attempt before its prepare commit can only leave private staging here.
                 shutil.rmtree(label, dir_fd=stage_fd)
-            os.mkdir(label, 0o700, dir_fd=stage_fd)
+            with filesystem_step("Creating staging directory", stage):
+                os.mkdir(label, 0o700, dir_fd=stage_fd)
             for source in source_groups[target]:
                 with (
                     directory_fd(
                         stage / source.name.parent, create=True, mode=directory_mode, owner=owner
                     ) as parent,
                     regular_file(source.path) as original,
+                    filesystem_step("Writing staged file", stage / source.name),
                 ):
                     if Source.signature(original.fileno()) != source.stamp:
                         raise InvalidMedia(
@@ -233,12 +242,13 @@ def stage_targets(job_id: str, settings: Settings, target_paths: dict, source_gr
                             )
                         set_permissions(output.fileno(), file_mode, owner)
                         os.fsync(output.fileno())
-                    os.fsync(parent)
+                    sync_directory(parent, stage / source.name.parent)
             with directory_fd(stage) as book_fd:
-                set_permissions(book_fd, directory_mode, owner)
-                os.fsync(book_fd)
+                with filesystem_step("Setting directory permissions", stage):
+                    set_permissions(book_fd, directory_mode, owner)
+                sync_directory(book_fd, stage)
                 identity = _identity(os.fstat(book_fd))
-            os.fsync(stage_fd)
+            sync_directory(stage_fd, root)
             prepared[target] = {"stage": str(stage), "destination": str(dest), "identity": identity}
     return prepared
 
@@ -256,18 +266,50 @@ def finish_targets(plan: dict) -> None:
             if current is not None:
                 if _identity(current) != expected:
                     raise NeedsReview(f"The destination already exists: {dest}")
-                os.fsync(dest_fd)
+                sync_directory(dest_fd, dest.parent)
                 continue
             stage_fd = stack.enter_context(directory_fd(stage.parent))
             if _identity(_entry(stage_fd, stage.name)) != expected:
                 raise NeedsReview(
                     "Prepared files are missing or changed. Restore the staging directory."
                 )
-            entries.append((stage_fd, stage.name, dest_fd, dest.name, dest))
-        for stage_fd, name, dest_fd, dest_name, dest in entries:
+            entries.append((stage_fd, stage, dest_fd, dest))
+        for stage_fd, stage, dest_fd, dest in entries:
+            with filesystem_step("Publishing library directory", dest):
+                try:
+                    _rename_exclusive(stage_fd, stage.name, dest_fd, dest.name)
+                except OSError as exc:
+                    if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                        raise NeedsReview(f"The destination already exists: {dest}") from exc
+                    raise
+            sync_directory(dest_fd, dest.parent)
+            sync_directory(stage_fd, stage.parent)
+
+
+def discard_prepared(plan: dict, job_id: str, deployment: Deployment) -> None:
+    for target, item in plan.items():
+        mount = deployment.audiobook_mount if target == "audio" else deployment.ebook_mount
+        stage, dest = Path(item["stage"]), Path(item["destination"])
+        expected = item["identity"]
+        if (
+            not expected
+            or not stage.is_relative_to(mount)
+            or not dest.is_relative_to(mount)
+            or stage.name != f"{job_id}-{target}"
+            or stage.is_relative_to(dest)
+            or dest.is_relative_to(stage)
+        ):
+            continue
+        with suppress(FileNotFoundError), directory_fd(stage.parent) as fd:
+            if _identity(_entry(fd, stage.name)) != expected:
+                continue
             try:
-                _rename_exclusive(stage_fd, name, dest_fd, dest_name)
-            except FileExistsError as exc:
-                raise NeedsReview(f"The destination already exists: {dest}") from exc
-            os.fsync(dest_fd)
-            os.fsync(stage_fd)
+                with directory_fd(dest.parent) as dest_fd:
+                    if _identity(_entry(dest_fd, dest.name)) == expected:
+                        continue
+            except FileNotFoundError:
+                pass
+            _private_stage(fd)
+            with filesystem_step("Removing staged directory", stage):
+                shutil.rmtree(stage.name, dir_fd=fd)
+            sync_directory(fd, stage.parent)

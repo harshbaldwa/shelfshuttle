@@ -207,7 +207,9 @@ def delete_job(runtime, job_id: str) -> None:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = get_job(session, job_id)
             if not can_delete(job):
-                raise HTTPException(409, "This job has started or completed a library import.")
+                raise HTTPException(
+                    409, "This job is importing or has completed its library import."
+                )
             job.status, job.detail = DELETING, None
             # Record the intent before deleting files so the worker can finish after a restart.
             session.commit()

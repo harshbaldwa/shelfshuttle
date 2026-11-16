@@ -20,6 +20,8 @@ Compare qBittorrent's save path and the actual file path with both download mapp
 
 Check that the container UID/GID can write each library parent, state directory, intake directory, and staging root. Use one mount for a library and its staging sibling. Separate bind mounts of directories on the same host disk can still fail with a cross-device rename error. Some network and virtual filesystems lack exclusive rename or directory synchronization. For new imports, prefer a local filesystem that supports both.
 
+Read the operation, container path, and errno on the failed job after retrying. If the error names `Publishing library directory` and reports `EINVAL` or `ENOTSUP`, check whether the mount supports atomic no-replace directory renames. On Linux, `findmnt -T /path/to/your/library-parent` shows the backing filesystem. If it lacks that rename operation, configure the library and staging directory under a filesystem that supports it. If only directory synchronization is unsupported, ShelfShuttle still syncs each file and uses exclusive rename. Recovery after a power loss then depends on when the filesystem persists its directory entries.
+
 With the Compose read-only root enabled, a mount directly at `/media/ebooks/library` leaves the default sibling `/media/ebooks/.shelfshuttle` on the read-only container filesystem. Mount the host parent at `/media/ebooks` and set `SHELFSHUTTLE_EBOOK_LIBRARY` to the mounted path of the existing book directory. If the directory is named `books` on the host, use `/media/ebooks/books`. ShelfShuttle creates staging beside it.
 
 After changing container library paths, recreate the ShelfShuttle container. Retry affected unprepared jobs, then confirm the updated destination in the review queue. A prepared job retains the paths it recorded for recovery.
@@ -31,7 +33,7 @@ After changing container library paths, recreate the ShelfShuttle container. Ret
 - **Prepared files are missing or changed.** Restore the recorded staging directory or published destination from the same filesystem. If the process published the first half of a pairing and a second destination conflicts, resolve the conflict and retry.
 - **Multiple M4Bs or mixed formats.** Select one M4B or the appropriate MP3 tracks in qBittorrent and retry.
 
-Use **Delete from queue** on a job that has yet to start or prepare a library import. Confirm to remove the job and its uploaded EPUB. The action leaves qBittorrent and the libraries untouched. If cleanup is interrupted, the worker retries it when it resumes.
+Use **Delete from queue** on a failed or queued job. Confirm to remove the job, its uploaded EPUB, and any matching unpublished staging directories. If a combined import already published one destination, its library files stay in place. If cleanup is interrupted, the worker retries it when it resumes.
 
 ## How should I back up and update the app?
 
