@@ -2,7 +2,7 @@
 
 ## Startup reports a state directory permission error
 
-Use the standard Compose file or add [`compose.state.yaml`](configuration.md#state-storage) to your custom Compose command. `shelfshuttle-state` prepares `/app/data` before startup, including a Compose-created `./data`. Inspect its log with `docker compose logs shelfshuttle-state` using the same Compose files you started with. Permission errors from the initializer can indicate a read-only mount or a filesystem that prevents ownership changes. Use a dedicated state directory on a local filesystem.
+Pull the current image and start it with `docker compose up -d`. The image prepares `./data` on startup and switches to the configured non-root user. Keep the standard entrypoint and avoid a Compose `user:` override if you want automatic state preparation. If startup reports an ownership error, check that `/app/data` is a writable local mount and that startup can change its ownership. Inspect failures with `docker compose logs shelfshuttle`.
 
 ## The browser says the request token expired
 
@@ -34,7 +34,7 @@ Read the operation, container path, and errno on the failed job after retrying. 
 
 If directory synchronization is unsupported, ShelfShuttle still syncs each file. Recovery after a power loss then depends on when the filesystem persists its directory entries.
 
-With the Compose read-only root enabled, a mount directly at `/media/ebooks/library` leaves the default sibling `/media/ebooks/.shelfshuttle` on the read-only container filesystem. Mount the host parent at `/media/ebooks` and set `SHELFSHUTTLE_EBOOK_LIBRARY` to the mounted path of the existing book directory. If the directory is named `books` on the host, use `/media/ebooks/books`. ShelfShuttle creates staging beside it.
+The default Compose file mounts the books and audiobooks directories separately. ShelfShuttle stages inside a private `.shelfshuttle` directory within each mount. If you customize the paths, put staging and its matching library on the same writable mount.
 
 After changing container library paths, recreate the ShelfShuttle container. Retry affected unprepared jobs, then confirm the updated destination in the review queue. A prepared job retains the paths it recorded for recovery.
 
@@ -49,4 +49,4 @@ Use **Delete from queue** on a failed or queued job. Confirm to remove the job, 
 
 ## How should I back up and update the app?
 
-Stop the ShelfShuttle service before making a filesystem copy of its state, intake, and any staging directories with pending jobs. Keep SQLite files and the private key together. Back up libraries separately. For an update, pull the desired release from your checkout and run `docker compose up -d --build`. Keep the same mount paths and storage.
+Stop the ShelfShuttle service before making a filesystem copy of its state, intake, and any staging directories with pending jobs. Keep SQLite files and the private key together. Back up libraries separately. For an update, run `docker compose pull` followed by `docker compose up -d --wait`. Keep the same mount paths and storage.

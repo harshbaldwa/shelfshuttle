@@ -92,14 +92,20 @@ class Settings(BaseModel):
         return self
 
 
+DEFAULT_LIBRARY_MOUNTS = {
+    "audiobook": Path("/media/books/audiobooks"),
+    "ebook": Path("/media/books/books"),
+}
+
+
 class Deployment(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     data: Path = Path("/app/data")
     downloads_mount: Path = Path("/downloads")
     intake_mount: Path = Path("/app/intake")
-    audiobook_mount: Path = Path("/media/audiobooks")
-    ebook_mount: Path = Path("/media/ebooks")
+    audiobook_mount: Path = DEFAULT_LIBRARY_MOUNTS["audiobook"]
+    ebook_mount: Path = DEFAULT_LIBRARY_MOUNTS["ebook"]
     cookie_secure: bool = True
     max_upload_mib: int = Field(64, ge=1, le=512)
     worker_enabled: bool = True
@@ -115,14 +121,15 @@ class Deployment(BaseModel):
         return self.max_upload_mib * 1024**2
 
     def defaults(self) -> dict:
-        return {
+        values = {
             "download_root": self.downloads_mount,
             "intake_root": self.intake_mount,
-            "audiobook_library": self.audiobook_mount / "library",
-            "audiobook_staging": self.audiobook_mount / ".shelfshuttle",
-            "ebook_library": self.ebook_mount / "library",
-            "ebook_staging": self.ebook_mount / ".shelfshuttle",
         }
+        for kind, default in DEFAULT_LIBRARY_MOUNTS.items():
+            mount = getattr(self, f"{kind}_mount")
+            values[f"{kind}_library"] = mount if mount == default else mount / "library"
+            values[f"{kind}_staging"] = mount / ".shelfshuttle"
+        return values
 
     def validate_settings(self, settings: Settings) -> Settings:
         restricted = {
@@ -139,6 +146,13 @@ class Deployment(BaseModel):
             if not path.is_relative_to(mount):
                 raise ValueError(f"{key} must be inside {mount}.")
             for other_key, other in paths:
+                if (
+                    key.endswith("_staging")
+                    and other_key == key.removesuffix("_staging") + "_library"
+                    and path == other / ".shelfshuttle"
+                ):
+                    # Book folder components cannot start with a dot.
+                    continue
                 if path.is_relative_to(other) or other.is_relative_to(path):
                     raise ValueError(f"{key} and {other_key} must be separate directories.")
             paths.append((key, path))

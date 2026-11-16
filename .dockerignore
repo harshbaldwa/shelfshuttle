@@ -9,6 +9,7 @@
 .ruff_cache
 data
 intake
+media
 secrets
 tests
 docs

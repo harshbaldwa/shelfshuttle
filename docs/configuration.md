@@ -13,27 +13,21 @@ All paths are paths inside ShelfShuttle unless identified as Compose source path
 | `SHELFSHUTTLE_DATA` | `/app/data` | State directory for SQLite, encryption key, covers, and the worker lock. It needs a local filesystem and write access restricted to the process owner. |
 | `SHELFSHUTTLE_DOWNLOADS_MOUNT` | `/downloads` | Allowed download mount root. Mount read-only. |
 | `SHELFSHUTTLE_INTAKE_MOUNT` | `/app/intake` | Allowed EPUB intake mount root. |
-| `SHELFSHUTTLE_AUDIOBOOK_MOUNT` | `/media/audiobooks` | Allowed audiobook library and staging mount root. |
-| `SHELFSHUTTLE_EBOOK_MOUNT` | `/media/ebooks` | Allowed ebook library and staging mount root. |
+| `SHELFSHUTTLE_AUDIOBOOK_MOUNT` | `/media/books/audiobooks` | Optional override for the audiobook mount. |
+| `SHELFSHUTTLE_EBOOK_MOUNT` | `/media/books/books` | Optional override for the ebook mount. |
 | `SHELFSHUTTLE_WORKER_ENABLED` | `true` | Run the background worker. With the worker disabled, the UI and API can still queue jobs. |
-| `SHELFSHUTTLE_PUID`, `SHELFSHUTTLE_PGID` | `10001`, `10001` | Build and run the Compose service with these non-root IDs. Use IDs that can access your bind mounts. |
-| `SHELFSHUTTLE_{DATA,INTAKE,DOWNLOADS,AUDIOBOOK,EBOOK}_SOURCE` | Corresponding named volume | Compose volume name or host path beginning with `/`, `./`, or `../`. |
-| `SHELFSHUTTLE_PROXY_NETWORK` | Unset | Name of the existing external network when applying the proxy override. |
+| `PUID`, `PGID` | `1000`, `1000` in Compose | Non-root IDs for the application process. A direct `docker run` defaults to `10001`, `10001`. |
+| `SHELFSHUTTLE_PROXY_NETWORK` | `frontend` | Existing trusted Docker network used by the example Compose file. |
 
 Set `SHELFSHUTTLE_QBIT_PASSWORD_FILE` to a readable, mounted secret file if you prefer to supply the qBittorrent password that way. Remove the direct password variable before setting the file path.
 
 ### State storage
 
-Keep the `data` named volume or set `SHELFSHUTTLE_DATA_SOURCE=./data` in `.env`. The standard Compose file runs a one-shot `shelfshuttle-state` service before the app. It opens only the `/app/data` mount, gives the configured UID and GID ownership of the directory and recognized state files, and makes them private. The initializer has no network access. Use a dedicated directory on a local filesystem that allows normal Linux ownership and permissions.
+The image starts with enough privileges to prepare its dedicated `/app/data` mount. It sets ownership and private permissions on the state directory and recognized state files, then drops privileges before launching the server. It can also initialize an empty root-owned intake directory. The runtime user must already have access to populated intake directories and media mounts.
 
-With your own `docker-compose.yaml`, keep the state mount `${SHELFSHUTTLE_DATA_SOURCE:-data}:/app/data` and apply the supplied override from the same directory as the Dockerfile. If you already have a running container, stop it before upgrading or changing UID/GID.
+Use a dedicated local filesystem for SQLite and the state key. Keep the same source mounted at `/app/data` across upgrades. If you used a named volume, keep that volume in your Compose file instead of switching to a new `./data` directory. If you used either older Compose override, retain your custom network and labels in the single Compose file, then start with `docker compose up -d --remove-orphans`.
 
-```sh
-docker compose -f docker-compose.yaml -f compose.state.yaml stop shelfshuttle
-docker compose -f docker-compose.yaml -f compose.state.yaml up -d --build
-```
-
-Keep the same volume or bind source across upgrades to retain the queue and encrypted settings. Changing the source selects a different state directory. If you change UID/GID, ensure those IDs can still access the intake, downloads, and library mounts.
+Existing jobs with prepared files use the recorded paths for recovery. Finish those jobs before moving or replacing the original mounts. Deployments using the legacy `/media/audiobooks` and `/media/ebooks` parent mounts can retain those paths with the corresponding mount overrides.
 
 ## Runtime settings
 
@@ -45,16 +39,18 @@ Keep the same volume or bind source across upgrades to retain the queue and encr
 | `SHELFSHUTTLE_REMOTE_DOWNLOAD_ROOT` | `/downloads` | qBittorrent-side absolute prefix and save path for new torrents. |
 | `SHELFSHUTTLE_DOWNLOAD_ROOT` | Downloads mount root | ShelfShuttle-side directory corresponding to the remote prefix. |
 | `SHELFSHUTTLE_INTAKE_ROOT` | Intake mount root | Directory for received EPUBs. |
-| `SHELFSHUTTLE_AUDIOBOOK_LIBRARY` | `<audiobook mount>/library` | Audiobook library watched by your media app. |
-| `SHELFSHUTTLE_AUDIOBOOK_STAGING` | `<audiobook mount>/.shelfshuttle` | Staging sibling on the same mount as the audiobook library. |
-| `SHELFSHUTTLE_EBOOK_LIBRARY` | `<ebook mount>/library` | Destination for ebook-only jobs. |
-| `SHELFSHUTTLE_EBOOK_STAGING` | `<ebook mount>/.shelfshuttle` | Staging sibling on the same mount as the ebook library. |
+| `SHELFSHUTTLE_AUDIOBOOK_LIBRARY` | `/media/books/audiobooks` | Optional audiobook library override. |
+| `SHELFSHUTTLE_AUDIOBOOK_STAGING` | `<audiobook mount>/.shelfshuttle` | Optional staging override on the same mount as the audiobook library. |
+| `SHELFSHUTTLE_EBOOK_LIBRARY` | `/media/books/books` | Optional library override for ebook-only jobs. |
+| `SHELFSHUTTLE_EBOOK_STAGING` | `<ebook mount>/.shelfshuttle` | Optional staging override on the same mount as the ebook library. |
 | `SHELFSHUTTLE_FOLDER_TEMPLATE` | `{author}/{title}` | Relative folder template with both fields. For example, `{author} - {title}`. |
 | `SHELFSHUTTLE_FILE_MODE`, `SHELFSHUTTLE_DIRECTORY_MODE` | `0644`, `0755` | Permissions for new media files and folders. |
 | `SHELFSHUTTLE_OWNER_UID`, `SHELFSHUTTLE_OWNER_GID` | Unset | Optional ownership of newly created media. A non-root process can only change groups it belongs to and normally cannot assign another UID. Prefer setting the container UID/GID directly. |
 | `SHELFSHUTTLE_POLL_SECONDS` | `5` | Delay between worker polling cycles, from 2 to 300 seconds. |
 | `SHELFSHUTTLE_METADATA_PROVIDER` | `embedded` | Read metadata from uploaded and downloaded files. |
 | `SHELFSHUTTLE_DRY_RUN` | `false` | Validate sources and check for target conflicts without submitting torrents or publishing library files. Existing torrents can be inspected. Dry-run jobs retain their intake files and job records. |
+
+The default library paths are the mounts themselves. A custom mount override keeps the legacy `library` subdirectory default. With the standard mounts, add `.shelfshuttle` to the library manager's exclusions if it scans hidden directories.
 
 For `combined` jobs, the audiobook library and folder template determine a single book folder containing the audio and the uploaded EPUB. Ebook-only jobs use the ebook library. ShelfShuttle names imported EPUBs and single M4B files `Author - Title.epub` and `Author - Title.m4b` using the confirmed book details. MP3 filenames and disc subfolders carry through to the library.
 

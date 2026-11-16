@@ -28,30 +28,61 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        state: [named, bind]
     env:
-      SHELFSHUTTLE_DATA_SOURCE: ${{ matrix.state == 'bind' && './data' || 'data' }}
+      SHELFSHUTTLE_IMAGE: shelfshuttle:ci
+      SHELFSHUTTLE_PROXY_NETWORK: shelfshuttle-ci
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Start an isolated Compose deployment
         run: |
-          umask 077
-          cp .env.example .env
-          if [ "$SHELFSHUTTLE_DATA_SOURCE" != data ]; then
-            test ! -e "$SHELFSHUTTLE_DATA_SOURCE"
-          fi
-          docker compose up --detach --build --wait --wait-timeout 90
-      - name: Check health, volume access, and network exposure
+          test ! -e .env
+          test ! -e ./data
+          mkdir -p media/media/books/{books,audiobooks} media/downloads/shelfshuttle
+          sudo chown 1000:1000 media/media/books/{books,audiobooks}
+          docker network create "$SHELFSHUTTLE_PROXY_NETWORK"
+          docker build --tag "$SHELFSHUTTLE_IMAGE" .
+          docker compose up --detach --pull never --wait --wait-timeout 90
+      - name: Check runtime privileges and import into the default mounts
         run: |
+          test "$(docker compose config --services)" = shelfshuttle
           test "$(docker inspect -f '{{len .HostConfig.PortBindings}}' "$(docker compose ps -q shelfshuttle)")" = 0
-          docker compose exec -T shelfshuttle python -c 'import urllib.request; assert urllib.request.urlopen("http://127.0.0.1:8080/healthz", timeout=4).status == 200'
-          docker compose exec -T shelfshuttle python -c 'import os; assert os.getuid() != 0; assert all(os.access(p, os.W_OK) for p in ("/app/data", "/app/intake", "/media/audiobooks", "/media/ebooks"))'
-          docker compose exec -T shelfshuttle python -c 'import os, stat; p = os.stat("/app/data"); assert p.st_uid == os.getuid() and p.st_gid == os.getgid() and stat.S_IMODE(p.st_mode) == 0o700; assert stat.S_IMODE(os.stat("/app/data/.key").st_mode) == 0o600'
+          docker compose exec --user 1000:1000 -T shelfshuttle python - < tests/smoke_container.py
       - if: failure()
         run: docker compose logs
       - if: always()
-        run: docker compose down --volumes
+        run: docker compose down
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [tests, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ghcr-latest
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}

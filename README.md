@@ -10,7 +10,7 @@ ShelfShuttle is a self-hosted ebook and audiobook intake manager. Upload an EPUB
 - Start downloads with a BitTorrent v1 magnet or info hash and track actual qBittorrent progress through restarts.
 - Import EPUBs and single M4Bs as `Author - Title`. MP3s keep their original filenames and disc structure. A paired edition puts the EPUB beside the audio in one audiobook library folder.
 - Review mismatched tags, existing destinations, and duplicate torrents. Retry failed jobs from the dashboard.
-- Validate sources in dry-run mode. Imports stage copies outside watched folders and use an atomic rename or exclusive file copies to protect existing files.
+- Validate sources in dry-run mode. Imports stage copies in private directories on the destination mount and use an atomic rename or exclusive file copies to protect existing files.
 - Run with reverse-proxy authentication, responsive light and dark themes, and non-root Docker defaults.
 
 Use torrents for content you have permission to download and share. ShelfShuttle accepts sources you provide and has no catalog or acquisition integrations.
@@ -27,53 +27,31 @@ The dashboard and Add Book form with a generated EPUB in a temporary library.
 
 ShelfShuttle delegates UI and API authentication to your reverse proxy. Configure authentication on every route to the service over HTTPS before exposing it. The default Compose service has no published host port.
 
-From the repository checkout, create your local configuration:
+Save [docker-compose.yaml](docker-compose.yaml) on your server. It runs one service from the published [ShelfShuttle image](https://github.com/harshbaldwa/shelfshuttle/pkgs/container/shelfshuttle). Set the values in that file or pass them in from your shell. Compose needs no `.env` file, source checkout, or local build.
+
+1. Attach the service to the trusted network shared by your reverse proxy. The example uses the existing external `frontend` network.
+2. Set `PUID` and `PGID` to the host user and group that can read downloads and write to your intake and library directories.
+3. Set the host-side volume paths and the qBittorrent URL and remote download root. Mount downloads read-only.
+4. Enable the example Traefik labels with your hostname and authentication middleware, or point your existing authenticated router at `shelfshuttle:8080`.
 
 ```sh
-umask 077
-cp .env.example .env
+docker compose pull
+docker compose up -d --wait
 ```
 
-Join an existing trusted Docker network shared with your proxy:
+| Container path | Purpose |
+| --- | --- |
+| `/app/data` | Durable state. The image prepares the `./data` bind automatically. |
+| `/app/intake` | Uploaded EPUBs pending processing. |
+| `/downloads` | Files downloaded by qBittorrent. |
+| `/media/books/books` | Ebook-only imports. |
+| `/media/books/audiobooks` | Audiobook-only and paired imports. |
 
-```sh
-SHELFSHUTTLE_PROXY_NETWORK=your-proxy-network \
-  docker compose -f docker-compose.yaml -f compose.proxy.yaml up -d --build
-docker compose ps
-```
+ShelfShuttle creates a private `.shelfshuttle` directory inside each library mount for staging. Exclude this hidden directory if your library manager scans dot-directories. No library or staging variables are needed for the mounts above.
 
-Point the proxy at `shelfshuttle:8080` and open the HTTPS hostname you configured. With Traefik and Keycloak, attach your existing Keycloak-backed middleware to the router for that hostname. Apply it to the UI and `/api/*`. The default named volumes persist state, intake files, and libraries across container recreation. To connect an existing download client or library, configure its mounts before importing. [Traefik middleware](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/overview/)
+Set the qBittorrent download root to the path the client sees for this category. ShelfShuttle maps that path to `/downloads`. Save any qBittorrent credentials in Settings, or use the environment or a mounted secret file. Run **Test saved connection** from Settings to check access. [Configuration reference](docs/configuration.md)
 
-Set `SHELFSHUTTLE_DATA_SOURCE=./data` in `.env` to keep state in a dedicated directory beside the Compose file. Compose creates the directory when needed and prepares its permissions before starting the non-root app. See the [custom Compose setup](docs/configuration.md#state-storage) if you maintain your own service definition.
-
-When upgrading from 0.1, configure proxy authentication and remove any custom host port mapping before replacing the container. You can remove the old ShelfShuttle admin and API credentials from `.env`.
-
-An example host layout gives each library a parent directory with a separate watched subdirectory and staging directory:
-
-```text
-/srv/media/audiobooks/
-  library/          # watched by the library manager
-  .shelfshuttle/    # private import staging, created as needed
-/srv/media/ebooks/
-  library/          # watched by the library manager
-  .shelfshuttle/    # private import staging, created as needed
-```
-
-An example `.env` for the library and qBittorrent integration:
-
-```dotenv
-SHELFSHUTTLE_DOWNLOADS_SOURCE=/srv/media/downloads
-SHELFSHUTTLE_AUDIOBOOK_SOURCE=/srv/media/audiobooks
-SHELFSHUTTLE_EBOOK_SOURCE=/srv/media/ebooks
-SHELFSHUTTLE_QBIT_URL=https://qbittorrent.example.test
-SHELFSHUTTLE_QBIT_USERNAME=books
-SHELFSHUTTLE_REMOTE_DOWNLOAD_ROOT=/downloads/books
-SHELFSHUTTLE_DOWNLOAD_ROOT=/downloads/books
-```
-
-In this example both services see the same downloads under `/downloads/books`. The remote prefix is qBittorrent's view. The mapped download root is ShelfShuttle's view. Set the qBittorrent password in Settings or pass it through `SHELFSHUTTLE_QBIT_PASSWORD` or its `_FILE` variant. Save the settings and run **Test saved connection**. qBittorrent must already be reachable from ShelfShuttle. If it lives on an existing Docker network, attach ShelfShuttle with an override. Leave qBittorrent's Web UI authentication enabled.
-
-The proxy and qBittorrent can use separate networks. Set the process UID/GID to a host identity with the access needed for the intake, downloads, and library mounts.
+When upgrading, keep the same state mount to retain your queue and settings. Finish any already-prepared imports before changing their library or staging mount paths. [State storage and upgrades](docs/configuration.md#state-storage)
 
 ## Local development
 

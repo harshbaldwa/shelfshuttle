@@ -1,40 +1,36 @@
+networks:
+  frontend:
+    external: true
+    name: "${SHELFSHUTTLE_PROXY_NETWORK:-frontend}"
+
 services:
   shelfshuttle:
-    build:
-      context: .
-      args:
-        SHELFSHUTTLE_PUID: "${SHELFSHUTTLE_PUID:-10001}"
-        SHELFSHUTTLE_PGID: "${SHELFSHUTTLE_PGID:-10001}"
-    restart: unless-stopped
-    depends_on:
-      shelfshuttle-state:
-        condition: service_completed_successfully
-    init: true
-    user: "${SHELFSHUTTLE_PUID:-10001}:${SHELFSHUTTLE_PGID:-10001}"
-    env_file:
-      - .env
+    image: ${SHELFSHUTTLE_IMAGE:-ghcr.io/harshbaldwa/shelfshuttle:latest}
+    networks:
+      - frontend
     environment:
-      TZ: ${TZ:-UTC}
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+      SHELFSHUTTLE_QBIT_URL: "${SHELFSHUTTLE_QBIT_URL:-}"
+      SHELFSHUTTLE_REMOTE_DOWNLOAD_ROOT: "${SHELFSHUTTLE_REMOTE_DOWNLOAD_ROOT:-/downloads}"
     volumes:
-      - ${SHELFSHUTTLE_DATA_SOURCE:-data}:/app/data
-      - ${SHELFSHUTTLE_INTAKE_SOURCE:-intake}:/app/intake
-      - ${SHELFSHUTTLE_DOWNLOADS_SOURCE:-downloads}:/downloads:ro
-      - ${SHELFSHUTTLE_AUDIOBOOK_SOURCE:-audiobooks}:/media/audiobooks
-      - ${SHELFSHUTTLE_EBOOK_SOURCE:-ebooks}:/media/ebooks
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+      - ./data:/app/data
+      - ${EXT_VOL:-.}/media/downloads/books:/app/intake
+      - ${EXT_VOL:-.}/media/downloads/shelfshuttle:/downloads:ro
+      - ${EXT_VOL:-.}/media/media/books/books:/media/books/books
+      - ${EXT_VOL:-.}/media/media/books/audiobooks:/media/books/audiobooks
+    labels:
+      - traefik.enable=${SHELFSHUTTLE_TRAEFIK_ENABLE:-false}
+      - traefik.http.routers.shelfshuttle.rule=Host(`books.${DOMAIN_SUFFIX:-example.test}`)
+      - traefik.http.routers.shelfshuttle.entrypoints=websecure
+      - traefik.http.routers.shelfshuttle.service=shelfshuttle
+      - traefik.http.routers.shelfshuttle.middlewares=${SHELFSHUTTLE_TRAEFIK_MIDDLEWARE:-shelfshuttle-auth@file}
+      - traefik.http.services.shelfshuttle.loadbalancer.server.port=8080
+    restart: unless-stopped
     read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=640m,mode=1777
-
-  shelfshuttle-state:
-    extends:
-      file: compose.state.yaml
-      service: shelfshuttle-state
-
-volumes:
-  data:
-  intake:
-  downloads:
-  audiobooks:
-  ebooks:

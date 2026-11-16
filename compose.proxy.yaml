@@ -1,9 +1,0 @@
-services:
-  shelfshuttle:
-    networks:
-      - proxy
-
-networks:
-  proxy:
-    external: true
-    name: ${SHELFSHUTTLE_PROXY_NETWORK:?Set SHELFSHUTTLE_PROXY_NETWORK}

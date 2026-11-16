@@ -57,7 +57,7 @@ def set_mode(fd: int, mode: int) -> None:
 
 def prepare_state(path: Path, uid: int, gid: int) -> None:
     if not (0 < uid <= 2147483647 and 0 < gid <= 2147483647):
-        raise ValueError("Set SHELFSHUTTLE_PUID and SHELFSHUTTLE_PGID to positive non-root IDs.")
+        raise ValueError("Set PUID and PGID to positive non-root IDs.")
 
     root = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -81,15 +81,3 @@ def prepare_state(path: Path, uid: int, gid: int) -> None:
         set_owner(root, uid, gid)
     finally:
         os.close(root)
-
-
-if __name__ == "__main__":
-    try:
-        uid = int(os.environ["SHELFSHUTTLE_PUID"])
-        gid = int(os.environ["SHELFSHUTTLE_PGID"])
-        prepare_state(Path("/app/data"), uid, gid)
-    except (OSError, ValueError, KeyError) as exc:
-        raise SystemExit(
-            f"Could not prepare the ShelfShuttle state mount at /app/data: {exc}"
-        ) from None
-    print("ShelfShuttle state mount is ready.")
