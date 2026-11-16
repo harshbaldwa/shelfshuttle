@@ -1,0 +1,98 @@
+<div class="metrics" aria-label="Queue totals">
+  {% for group, icon in [('active', '↓'), ('review', '!'), ('complete', '✓'), ('failed', '×')] %}
+    {% if total %}<a class="metric panel {{ group }}" href="#queue-{{ group }}">
+    {% else %}<div class="metric panel {{ group }}">{% endif %}
+      <span class="metric-icon" aria-hidden="true">{{ icon }}</span>
+      <span class="metric-label">{{ group_labels[group] }}</span>
+      <strong>{{ counts[group] }}</strong>
+    {% if total %}</a>{% else %}</div>{% endif %}
+  {% endfor %}
+</div>
+{% if total == 0 %}
+<section class="empty panel" id="queue-active">
+  <span class="empty-icon brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+  <h2>Your queue is empty</h2>
+  <p>Add an EPUB or an audiobook torrent to get started.</p>
+  <a class="button secondary" href="/add">Add your first book <span aria-hidden="true">→</span></a>
+</section>
+{% endif %}
+{% if total %}
+{% for group in ['active', 'review', 'complete', 'failed', 'dry_run'] %}
+{% if group != 'dry_run' or counts[group] %}
+<section class="queue-section" id="queue-{{ group }}">
+  <h2>{{ group_labels[group] }} <span>{{ counts[group] }}</span></h2>
+  {% for job in groups[group] %}
+  <article class="job panel">
+    {% if job.cover_url %}
+    <img class="job-cover" src="{{ job.cover_url }}" alt="" loading="lazy" width="56" height="72">
+    {% else %}
+    <div class="job-cover fallback" aria-hidden="true"><span></span></div>
+    {% endif %}
+    <div class="job-info">
+      <h3>{{ job.title }}</h3>
+      <p>{{ job.author }} <span aria-hidden="true">·</span> {{ formats[job.format] }}</p>
+      {% if job.detail %}<p class="job-detail {{ group }}">{{ job.detail }}</p>{% endif %}
+      {% if job.progress is not none %}
+      <div class="progress-row">
+        <progress aria-label="{{ job.title }} download progress" value="{{ job.progress }}" max="1"></progress>
+        <span>{{ '%g'|format((job.progress * 100)|round(1)) }}%</span>
+      </div>
+      {% endif %}
+      {% for target, path in job.destinations.items() %}
+        <div class="path-line"><span>{{ 'Audiobook' if target == 'audio' else 'Ebook' }}</span> <code>{{ path }}</code></div>
+      {% endfor %}
+      {% if job.metadata %}
+      <details class="metadata">
+        <summary>Embedded metadata</summary>
+        {% for kind, tags in job.metadata.items() %}
+        <dl>
+          {% for field, label in [('title', 'Title'), ('author', 'Author'), ('isbn', 'ISBN'), ('language', 'Language'), ('series', 'Series'), ('narrator', 'Narrator')] %}
+            {% if tags.get(field) %}<dt>{{ label }}</dt><dd>{{ tags[field] }}</dd>{% endif %}
+          {% endfor %}
+          {% if tags.duration_seconds %}<dt>Duration</dt><dd>{{ (tags.duration_seconds / 60)|round(1) }} min</dd>{% endif %}
+          {% if tags.chapters %}<dt>Chapters</dt><dd>{{ tags.chapters|length }}</dd>{% endif %}
+          {% if tags.tracks %}<dt>Tracks</dt><dd>{{ tags.tracks|length }}</dd>{% endif %}
+        </dl>
+        {% endfor %}
+      </details>
+      {% endif %}
+      {% if job.status in ('failed', 'review') %}
+        <div class="job-actions">
+          <form method="post" action="/jobs/{{ job.id }}/action">
+            <input type="hidden" name="_csrf" value="{{ csrf }}">
+            <button name="intent" value="retry" class="button secondary small">Retry</button>
+          </form>
+          {% if job.status == 'review' and not job.prepared and job.review_kind in ('metadata', 'duplicate', 'settings', 'hash', 'conflict') %}
+          <details class="review-form">
+            <summary>{{ 'Add a magnet' if job.review_kind == 'hash' else 'Review details' }}</summary>
+            <form method="post" action="/jobs/{{ job.id }}/action" class="fields">
+              <input type="hidden" name="_csrf" value="{{ csrf }}">
+              {% if job.review_kind == 'hash' %}
+              <label>Magnet URI <input name="torrent" maxlength="4000" required></label>
+              {% else %}
+              <label>Title <input name="title" value="{{ job.title }}" maxlength="200" required></label>
+              <label>Author <input name="author" value="{{ job.author }}" maxlength="200" required></label>
+              {% endif %}
+              <button name="intent" value="approve" class="button primary small">{{ 'Use existing torrent' if job.review_kind == 'duplicate' else 'Confirm and retry' }}</button>
+            </form>
+          </details>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+    <span class="status {{ group }}">{{ statuses[job.status] }}</span>
+  </article>
+  {% else %}
+    <p class="queue-empty">{{ 'No entries on this page.' if counts[group] else 'None yet.' }}</p>
+  {% endfor %}
+</section>
+{% endif %}
+{% endfor %}
+{% if batch > 1 or has_next %}
+<nav class="form-actions" aria-label="Queue pages">
+  {% if batch > 1 %}<a class="button secondary small" href="/?batch={{ batch - 1 }}">Previous</a>{% endif %}
+  <span class="hint">Page {{ batch }}</span>
+  {% if has_next %}<a class="button secondary small" href="/?batch={{ batch + 1 }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endif %}

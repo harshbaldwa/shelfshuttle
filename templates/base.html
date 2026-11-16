@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <title>{% block title %}ShelfShuttle{% endblock %}</title>
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body class="{% if page %}app-shell{% else %}login-shell{% endif %}">
+  <a class="skip" href="#main">Skip to content</a>
+  {% if page %}
+  <aside class="sidebar">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      ShelfShuttle
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="/" {% if page == 'dashboard' %}aria-current="page"{% endif %}><span aria-hidden="true" class="nav-icon">▦</span> Dashboard</a>
+      <a href="/add" {% if page == 'add' %}aria-current="page"{% endif %}><span aria-hidden="true" class="nav-icon">＋</span> Add book</a>
+      <a href="/settings" {% if page == 'settings' %}aria-current="page"{% endif %}><span aria-hidden="true" class="nav-icon">⚙</span> Settings</a>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="theme-button" type="button" data-theme-toggle><span aria-hidden="true">◐</span> <span data-theme-label>Change theme</span></button>
+      <form action="/logout" method="post">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button class="sign-out" type="submit"><span aria-hidden="true">↪</span> Sign out</button>
+      </form>
+    </div>
+  </aside>
+  {% endif %}
+  <main id="main" class="main-content">
+    {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+    {% block main %}{% endblock %}
+  </main>
+</body>
+</html>

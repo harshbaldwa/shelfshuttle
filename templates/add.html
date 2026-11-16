@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Add book · ShelfShuttle{% endblock %}
+{% block main %}
+<header class="page-heading">
+  <div>
+    <h1>Add book</h1>
+    <p>Upload an ebook, queue an audiobook, or import both together.</p>
+  </div>
+</header>
+<form method="post" action="/add" enctype="multipart/form-data" data-add-form>
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  <div class="add-layout">
+    <div class="stack">
+      <fieldset class="panel form-panel">
+        <legend>Format</legend>
+        <div class="choices">
+          {% for kind, name in formats.items() %}
+          <label class="choice">
+            <input type="radio" name="format" value="{{ kind }}" {% if values.get('format', 'combined') == kind %}checked{% endif %}>
+            <span>{{ name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      <section class="panel form-panel" aria-labelledby="book-details">
+        <h2 id="book-details">Book details</h2>
+        <div class="fields two">
+          <label>Author <input name="author" type="text" maxlength="200" value="{{ values.get('author', '') }}" required placeholder="Author name"></label>
+          <label>Title <input name="title" type="text" maxlength="200" value="{{ values.get('title', '') }}" required placeholder="Book title"></label>
+        </div>
+      </section>
+      <section class="panel form-panel" aria-labelledby="source-heading">
+        <h2 id="source-heading">Source files</h2>
+        <div class="fields stack">
+          <div data-ebook-field>
+            <label class="file-field">EPUB file
+              <input name="epub" type="file" accept=".epub,application/epub+zip" aria-describedby="upload-help upload-status">
+            </label>
+            <p id="upload-help" class="hint">Up to {{ limit }} MiB. ShelfShuttle can suggest details from the EPUB.</p>
+            <p id="upload-status" class="hint" role="status" hidden></p>
+            <button class="button secondary small" type="button" data-apply-suggestion hidden>Use EPUB details</button>
+          </div>
+          <label data-audio-field>Magnet link or info hash
+            <input name="torrent" maxlength="4000" placeholder="magnet:?xt=urn:btih:…" autocomplete="off" spellcheck="false" aria-describedby="magnet-help">
+            <small id="magnet-help">A bare hash looks up an existing torrent. Use a magnet to submit a new download.</small>
+          </label>
+        </div>
+      </section>
+    </div>
+    <aside class="panel form-panel destination" aria-labelledby="destination-heading">
+      <span class="metric-icon" aria-hidden="true">↳</span>
+      <h2 id="destination-heading">Destination preview</h2>
+      <div data-preview aria-live="polite">
+        <p>Enter an author and title to preview the library folders.</p>
+      </div>
+      <button class="button primary" type="submit">Add to queue <span aria-hidden="true">→</span></button>
+    </aside>
+  </div>
+</form>
+{% endblock %}

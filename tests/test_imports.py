@@ -1,0 +1,357 @@
+import errno
+import os
+import stat
+from pathlib import Path
+from zipfile import ZipInfo
+
+import pytest
+from conftest import (
+    AUTH,
+    DIGEST,
+    MAGNET,
+    action,
+    configure,
+    epub_bytes,
+    get_job,
+    torrent,
+    write_audio,
+)
+from fastapi.testclient import TestClient
+
+from app.services import importing
+
+
+def submit(rig, *args, **kwargs):
+    response = rig.submit(*args, **kwargs)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_epub_only_metadata_and_cover(rig):
+    raw = epub_bytes(cover=True)
+    job = submit(rig, epub=("Orbit.epub", raw))
+    assert job["status"] == "queued"
+    assert job["metadata"]["ebook"]["series"] == "Example Orbit"
+    assert job["metadata"]["ebook"]["language"] == "en"
+    assert job["metadata"]["ebook"]["isbn"] == "9781234567897"
+    response = rig.client.get(job["cover_url"], headers=AUTH)
+    assert response.headers["content-type"] == "image/jpeg"
+    assert rig.client.get(job["cover_url"]).status_code == 401
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").read_bytes() == raw
+    assert not rig.fake.requests
+    assert not rig.deployment.audiobook_mount.exists()
+
+
+def test_audiobook_single_m4b(rig):
+    audio = write_audio(rig.downloads / "Torrent Root" / "Original Name.m4b")
+    rig.fake.complete(rig.downloads, [audio])
+    job = submit(rig, "audio")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert result["progress"] == 1
+    assert result["metadata"]["audio"]["narrator"] == "Sample Narrator"
+    assert result["metadata"]["audio"]["duration_seconds"] > 0
+    assert (Path(job["destinations"]["audio"]) / audio.name).read_bytes() == audio.read_bytes()
+    assert rig.fake.adds == 0
+
+
+def test_multiple_mp3_natural_order_and_disc_folders(rig):
+    paths = [
+        write_audio(rig.downloads / "Root" / name)
+        for name in ("Disc 2/1.mp3", "Disc 1/10.mp3", "Disc 1/2.mp3")
+    ]
+    rig.fake.complete(rig.downloads, paths)
+    job = submit(rig, "audio")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert result["metadata"]["audio"]["tracks"] == [
+        "Disc 1/2.mp3",
+        "Disc 1/10.mp3",
+        "Disc 2/1.mp3",
+    ]
+    for source in paths:
+        assert (
+            Path(job["destinations"]["audio"]) / source.relative_to(rig.downloads / "Root")
+        ).is_file()
+
+
+def test_combined_and_recovery_after_first_atomic_rename(rig, monkeypatch):
+    audio = write_audio(rig.downloads / "Original.m4b")
+    rig.fake.complete(rig.downloads, [audio])
+    job = submit(rig, "combined")
+    rename = importing._rename_exclusive
+
+    def crash(*args):
+        rename(*args)
+        raise SystemExit("Power loss immediately after publishing the first target")
+
+    monkeypatch.setattr(importing, "_rename_exclusive", crash)
+    with pytest.raises(SystemExit):
+        rig.tick()
+    book = Path(job["destinations"]["audio"])
+    first_inode = book.stat().st_ino
+    assert (book / "Orbit.epub").exists()
+    assert not Path(job["destinations"]["ebook"]).exists()
+    assert get_job(rig, job["id"])["prepared"]
+
+    monkeypatch.setattr(importing, "_rename_exclusive", rename)
+    app = rig.app_factory()
+    with TestClient(app) as client:
+        app.state.worker.tick()
+        result = client.get(f"/api/jobs/{job['id']}", headers=AUTH).json()
+        assert result["status"] == "complete", result
+    rig.tick()
+    assert book.stat().st_ino == first_inode
+    assert (book / "Original.m4b").read_bytes() == audio.read_bytes()
+    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").exists()
+
+
+def test_stale_stage_rebuilt_after_preparation_crash(rig, monkeypatch):
+    job = submit(rig)
+    from app.workers import worker
+
+    original = worker.stage_targets
+
+    def interrupt(*args):
+        original(*args)
+        raise SystemExit
+
+    monkeypatch.setattr(worker, "stage_targets", interrupt)
+    with pytest.raises(SystemExit):
+        rig.tick()
+    assert not get_job(rig, job["id"])["prepared"]
+    monkeypatch.setattr(worker, "stage_targets", original)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+
+
+def test_qbit_add_lost_response_recovers_and_tracks_real_progress(rig):
+    rig.fake.break_after_add = True
+    job = submit(rig, "audio", magnet=MAGNET)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "submitting"
+    tag = rig.fake.torrents[DIGEST]["tags"]
+    rig.fake.torrents[DIGEST] = torrent("downloading", 0.372, tags=tag)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["progress"] == 0.372
+    assert result["status"] == "downloading"
+    audio = write_audio(rig.downloads / "book.m4b")
+    rig.fake.complete(rig.downloads, [audio], tags=tag)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+    assert rig.fake.adds == 1
+    assert rig.fake.logins >= 2
+    assert rig.fake.requests.count(("POST", "torrents/createCategory")) == 1
+    assert audio.is_file()
+
+
+def test_bare_hash_does_not_submit_and_can_be_supplied_a_magnet(rig):
+    job = submit(rig, "audio", magnet="A" * 40)
+    rig.tick()
+    review = get_job(rig, job["id"])
+    assert (review["status"], review["review_kind"]) == ("review", "hash")
+    assert rig.fake.adds == 0
+    action(rig, job["id"], "approve", torrent=MAGNET)
+    rig.tick()
+    assert rig.fake.adds == 1
+
+
+def test_duplicate_in_app_and_existing_torrent_review(rig):
+    # Same SHA-1 arrives as a hex magnet and then a base32 hash.
+    from base64 import b32encode
+
+    job = submit(rig, "audio", magnet=MAGNET)
+    duplicate = rig.submit("audio", magnet=b32encode(bytes.fromhex(DIGEST)).decode())
+    assert duplicate.status_code == 409
+    audio = write_audio(rig.downloads / "book.m4b")
+    rig.fake.complete(rig.downloads, [audio])
+    rig.tick()
+    assert get_job(rig, job["id"])["review_kind"] == "duplicate"
+    action(rig, job["id"], "approve")
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+    assert rig.fake.adds == 0
+
+
+def test_existing_destination_remains_untouched_and_retry_works(rig):
+    job = submit(rig)
+    destination = Path(job["destinations"]["ebook"])
+    destination.mkdir(parents=True)
+    (destination / "existing").write_text("Keep this.")
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "review"
+    assert list(destination.iterdir()) == [destination / "existing"]
+    action(rig, job["id"], "approve", title="Alternate Edition")
+    rig.tick()
+    assert get_job(rig, job["id"])["review_kind"] == "metadata"
+    action(rig, job["id"], "approve")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    assert Path(result["destinations"]["ebook"]).name == "Alternate Edition"
+    assert (destination / "existing").read_text() == "Keep this."
+
+
+def test_existing_directory_race_does_not_merge_or_replace(rig, monkeypatch):
+    job = submit(rig)
+    destination = Path(job["destinations"]["ebook"])
+    rename = importing._rename_exclusive
+
+    def arrive(*args):
+        destination.mkdir()
+        rename(*args)
+
+    monkeypatch.setattr(importing, "_rename_exclusive", arrive)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "review"
+    assert list(destination.iterdir()) == []
+    assert get_job(rig, job["id"])["prepared"]
+
+
+def test_metadata_conflict_needs_approval(rig):
+    job = submit(rig, title="The title I chose")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["review_kind"] == "metadata"
+    assert not Path(job["destinations"]["ebook"]).exists()
+    action(rig, job["id"], "approve")
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+    assert Path(job["destinations"]["ebook"]).name == "The title I chose"
+
+
+def test_title_traversal_is_sanitized_and_source_escape_is_rejected(rig):
+    job = submit(rig, "audio", title="../Outside")
+    assert Path(job["destinations"]["audio"]).name == "_Outside"
+    rig.fake.torrents[DIGEST] = torrent("uploading", 1)
+    rig.fake.file_entries[DIGEST] = [
+        {"name": "../private.mp3", "size": 10, "priority": 1, "progress": 1},
+    ]
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed"
+    assert "unsafe" in result["detail"]
+    assert not rig.deployment.audiobook_mount.exists()
+
+
+def test_symlink_sources_are_rejected(rig):
+    real = write_audio(rig.root / "external.m4b")
+    alias = rig.downloads / "alias"
+    alias.symlink_to(real.parent, target_is_directory=True)
+    rig.fake.complete(rig.downloads, [alias / real.name])
+    job = submit(rig, "audio")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed"
+    assert "symlink" in result["detail"]
+
+
+def test_symlink_library_is_rejected(rig):
+    job = submit(rig)
+    external = rig.root / "external"
+    external.mkdir()
+    root = rig.deployment.ebook_mount
+    root.mkdir()
+    (root / "library").symlink_to(external, target_is_directory=True)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "failed"
+    assert not list(external.iterdir())
+
+
+def test_permissions_are_applied_to_published_media(rig):
+    # UID/GID are left unset for runner-independent execution.
+    configure(rig, file_mode="0640", directory_mode="0750")
+    job = submit(rig)
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+    path = Path(job["destinations"]["ebook"])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o750
+    assert stat.S_IMODE((path / "Orbit.epub").stat().st_mode) == 0o640
+    assert (path / "Orbit.epub").stat().st_uid == os.geteuid()
+
+
+def test_permission_errors_are_actionable_and_retriable(rig, monkeypatch):
+    from app.workers import worker
+
+    original = worker.stage_targets
+
+    def deny(*args):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(worker, "stage_targets", deny)
+    job = submit(rig)
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "failed"
+    assert "UID/GID" in result["detail"]
+    monkeypatch.setattr(worker, "stage_targets", original)
+    action(rig, job["id"])
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "complete"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"not a ZIP",
+        epub_bytes(extra=("../escape.xhtml", b"x")),
+        epub_bytes(extra=("book/duplicate.bin", b"x" * (2 * 1024**2))),
+        b"x" * (1024**2 + 1),
+    ],
+)
+def test_invalid_epub_does_not_write_intake(rig, raw):
+    response = rig.submit(epub=("bad.epub", raw))
+    assert response.status_code in (413, 422), response.text
+    assert not rig.deployment.intake_mount.exists()
+
+
+def test_archive_symlink_and_upload_filename_are_rejected(rig):
+    member = ZipInfo("book/symlink")
+    member.create_system = 3
+    member.external_attr = (stat.S_IFLNK | 0o777) << 16
+    assert (
+        rig.submit(epub=("bad.epub", epub_bytes(extra=(member, b"/somewhere")))).status_code == 422
+    )
+    assert rig.submit(epub=("../bad.epub", epub_bytes())).status_code == 422
+    assert not rig.deployment.intake_mount.exists()
+
+
+def test_dry_run_skips_library_writes_and_torrent_submission(rig):
+    configure(rig, dry_run=True)
+    ebook = submit(rig)
+    audio = submit(rig, "audio", magnet=MAGNET)
+    rig.tick()
+    assert get_job(rig, ebook["id"])["status"] == "dry_run"
+    assert get_job(rig, audio["id"])["status"] == "review"
+    assert rig.fake.adds == 0
+    assert not rig.deployment.ebook_mount.exists()
+    assert not rig.deployment.audiobook_mount.exists()
+
+
+def test_invalid_audio_fails_without_touching_source(rig):
+    audio = rig.downloads / "broken.m4b"
+    audio.write_bytes(b"invalid audio content")
+    rig.fake.complete(rig.downloads, [audio])
+    job = submit(rig, "audio")
+    rig.tick()
+    assert get_job(rig, job["id"])["status"] == "failed"
+    assert audio.read_bytes() == b"invalid audio content"
+
+
+def test_changed_library_settings_require_explicit_confirmation(rig):
+    job = submit(rig)
+    new_root = rig.deployment.ebook_mount / "alternate"
+    configure(rig, ebook_library=str(new_root))
+    rig.tick()
+    assert get_job(rig, job["id"])["review_kind"] == "settings"
+    action(rig, job["id"], "approve")
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete"
+    assert Path(result["destinations"]["ebook"]).is_relative_to(new_root)

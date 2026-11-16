@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Settings · ShelfShuttle{% endblock %}
+{% block main %}
+<header class="page-heading">
+  <div>
+    <h1>Settings</h1>
+    <p>Configure qBittorrent, mounted libraries, and import behavior.</p>
+  </div>
+</header>
+{% if saved %}<div class="notice success" role="status">Settings saved.</div>{% endif %}
+<form method="post" action="/settings" class="settings-form stack">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% for heading, fields in sections %}
+  <section class="panel form-panel" aria-labelledby="settings-{{ loop.index }}">
+    <h2 id="settings-{{ loop.index }}">{{ heading }}</h2>
+    {% if heading == "Library & intake" %}
+    <p class="hint">Use absolute paths inside the mounted directories. Each staging folder must be outside the libraries and on the same mount as its destination.</p>
+    {% endif %}
+    <div class="fields two">
+      {% for key, label, type in fields %}
+      {% set managed = key in values.environment_managed %}
+      {% if type == 'checkbox' %}
+      <label class="check-field">
+        <input type="checkbox" name="{{ key }}" {% if values[key] %}checked{% endif %} {% if managed %}disabled{% endif %}>
+        <span>{{ label }}<small>Validate imports without submitting torrents or writing to the library.</small>{% if managed %}<small>Set by environment</small>{% endif %}</span>
+      </label>
+      {% elif type == 'password' %}
+      <div>
+        <label>{{ label }} <input name="{{ key }}" type="password" autocomplete="new-password" {% if managed %}disabled{% endif %} placeholder="{{ 'Password configured' if values.qbit_password_set else 'Optional' }}"></label>
+        {% if managed %}<small>Set by environment</small>
+        {% elif values.qbit_password_set %}<label class="check-field compact"><input type="checkbox" name="clear_password"> Clear stored password</label>{% endif %}
+      </div>
+      {% elif type == 'provider' %}
+      <label>{{ label }}
+        <select name="{{ key }}" {% if managed %}disabled{% endif %}><option value="embedded">Embedded file metadata</option></select>
+        {% if managed %}<small>Set by environment</small>{% endif %}
+      </label>
+      {% else %}
+      <label>{{ label }} <input name="{{ key }}" type="{{ type }}" value="{{ values[key] if values[key] is not none else '' }}" {% if managed %}disabled{% endif %} {% if type == 'number' %}min="{{ 2 if key == 'poll_seconds' else 1 }}"{% endif %} spellcheck="false">
+        {% if managed %}<small>Set by environment</small>{% endif %}
+      </label>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% if heading == 'qBittorrent' %}
+    <div class="form-actions">
+      <button class="button secondary" type="button" data-test-qbit>Test saved connection</button>
+      <span data-qbit-status class="hint" role="status"></span>
+    </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+  <div class="form-actions"><button type="submit" class="button primary">Save settings</button></div>
+</form>
+{% endblock %}

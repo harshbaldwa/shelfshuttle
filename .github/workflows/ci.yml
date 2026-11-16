@@ -1,0 +1,47 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Start an isolated Compose deployment
+        run: |
+          umask 077
+          printf 'SHELFSHUTTLE_ADMIN_PASSWORD=%s\n' "$(python3 -c 'import secrets; print(secrets.token_hex(24))')" > .env
+          docker compose up --detach --build --wait --wait-timeout 90
+      - name: Check health and volume access
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+          docker compose exec -T shelfshuttle python -c 'import os; assert os.getuid() != 0; assert all(os.access(p, os.W_OK) for p in ("/app/data", "/app/intake", "/media/audiobooks", "/media/ebooks"))'
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down --volumes

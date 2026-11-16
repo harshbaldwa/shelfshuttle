@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign in · ShelfShuttle{% endblock %}
+{% block main %}
+<section class="login-card panel">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    ShelfShuttle
+  </div>
+  <p class="login-tagline">From download to bookshelf, without the busywork.</p>
+  <h1>Sign in</h1>
+  <form method="post" action="/login" class="fields">
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+    <label>Username <input name="username" autocomplete="username" required maxlength="100" autofocus></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="button primary" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

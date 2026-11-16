@@ -1,0 +1,30 @@
+services:
+  shelfshuttle:
+    build: .
+    restart: unless-stopped
+    init: true
+    user: "${SHELFSHUTTLE_PUID:-10001}:${SHELFSHUTTLE_PGID:-10001}"
+    ports:
+      - "${SHELFSHUTTLE_BIND:-127.0.0.1}:${SHELFSHUTTLE_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${SHELFSHUTTLE_DATA_SOURCE:-data}:/app/data
+      - ${SHELFSHUTTLE_INTAKE_SOURCE:-intake}:/app/intake
+      - ${SHELFSHUTTLE_DOWNLOADS_SOURCE:-downloads}:/downloads:ro
+      - ${SHELFSHUTTLE_AUDIOBOOK_SOURCE:-audiobooks}:/media/audiobooks
+      - ${SHELFSHUTTLE_EBOOK_SOURCE:-ebooks}:/media/ebooks
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=640m,mode=1777
+
+volumes:
+  data:
+  intake:
+  downloads:
+  audiobooks:
+  ebooks:

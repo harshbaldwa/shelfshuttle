@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · ShelfShuttle{% endblock %}
+{% block main %}
+<header class="page-heading">
+  <div>
+    <h1>Dashboard</h1>
+    <p>Follow books from intake to your library.</p>
+  </div>
+  <a class="button primary" href="/add"><span aria-hidden="true">＋</span> Add book</a>
+</header>
+<div data-dashboard>
+  {% include "joblist.html" %}
+</div>
+{% endblock %}
