@@ -49,7 +49,7 @@ Choose your UID and GID before creating the named volumes. Docker initializes fr
 | `SHELFSHUTTLE_METADATA_PROVIDER` | `embedded` | Read metadata from uploaded and downloaded files. |
 | `SHELFSHUTTLE_DRY_RUN` | `false` | Validate sources and check for target conflicts without submitting torrents or publishing library files. Existing torrents can be inspected. Dry-run jobs retain their intake files and job records. |
 
-For `combined` jobs, the audiobook library and folder template determine a single book folder containing the audio and the uploaded EPUB. Ebook-only jobs use the ebook library.
+For `combined` jobs, the audiobook library and folder template determine a single book folder containing the audio and the uploaded EPUB. Ebook-only jobs use the ebook library. ShelfShuttle names imported EPUBs and single M4B files `Author - Title.epub` and `Author - Title.m4b` using the confirmed book details. MP3 filenames and disc subfolders carry through to the library.
 
 Use a dedicated category per ShelfShuttle deployment and a directory writable by qBittorrent. ShelfShuttle requests that path explicitly for new submissions. A 40-character hex or 32-character base32 v1 hash tracks an existing torrent or starts a new one with a trackerless magnet. Completion depends on peer discovery and availability. Provide the full magnet when the torrent needs its trackers. The integration uses the [qBittorrent Web API](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29), accepts the [session cookie used by recent versions](https://github.com/qbittorrent/qBittorrent/blob/v5_2_x/WebAPI_Changelog.md), and uses the [BitTorrent magnet format](https://www.bittorrent.org/beps/bep_0009.html).
 

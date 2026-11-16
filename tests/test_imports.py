@@ -10,6 +10,7 @@ import httpx
 import pytest
 from conftest import (
     AUTH,
+    BOOK_FILENAME_STEM,
     DIGEST,
     MAGNET,
     action,
@@ -21,6 +22,7 @@ from conftest import (
 )
 from fastapi.testclient import TestClient
 
+from app.core.paths import book_file_stem
 from app.services import importing
 from app.services.qbittorrent import QBittorrent, TorrentError
 
@@ -44,7 +46,7 @@ def test_epub_only_metadata_and_cover(rig):
     rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "complete", result
-    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").read_bytes() == raw
+    assert (Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub").read_bytes() == raw
     assert not rig.fake.requests
     assert not rig.deployment.audiobook_mount.exists()
 
@@ -59,17 +61,20 @@ def test_audiobook_single_m4b(rig):
     assert result["progress"] == 1
     assert result["metadata"]["audio"]["narrator"] == "Sample Narrator"
     assert result["metadata"]["audio"]["duration_seconds"] > 0
-    assert (Path(job["destinations"]["audio"]) / audio.name).read_bytes() == audio.read_bytes()
+    filename = f"{BOOK_FILENAME_STEM}.m4b"
+    assert result["metadata"]["audio"]["tracks"] == [filename]
+    assert (Path(job["destinations"]["audio"]) / filename).read_bytes() == audio.read_bytes()
     assert rig.fake.adds == 0
 
 
-def test_multiple_mp3_natural_order_and_disc_folders(rig):
+@pytest.mark.parametrize("kind", ["audio", "combined"])
+def test_multiple_mp3_natural_order_and_disc_folders(rig, kind):
     paths = [
         write_audio(rig.downloads / "Root" / name)
         for name in ("Disc 2/1.mp3", "Disc 1/10.mp3", "Disc 1/2.mp3")
     ]
     rig.fake.complete(rig.downloads, paths)
-    job = submit(rig, "audio")
+    job = submit(rig, kind)
     rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "complete", result
@@ -81,7 +86,10 @@ def test_multiple_mp3_natural_order_and_disc_folders(rig):
     for source in paths:
         assert (
             Path(job["destinations"]["audio"]) / source.relative_to(rig.downloads / "Root")
-        ).is_file()
+        ).read_bytes() == source.read_bytes()
+    if kind == "combined":
+        assert (Path(job["destinations"]["audio"]) / f"{BOOK_FILENAME_STEM}.epub").is_file()
+        assert not rig.deployment.ebook_mount.exists()
 
 
 def test_legacy_prepared_pair_recovers_after_first_atomic_rename(
@@ -102,7 +110,7 @@ def test_legacy_prepared_pair_recovers_after_first_atomic_rename(
             rig.tick()
     book = Path(job["destinations"]["audio"])
     first_inode = book.stat().st_ino
-    assert (book / "Orbit.epub").exists()
+    assert (book / f"{BOOK_FILENAME_STEM}.epub").exists()
     assert not Path(job["destinations"]["ebook"]).exists()
     assert get_job(rig, job["id"])["prepared"]
     assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 409
@@ -115,8 +123,8 @@ def test_legacy_prepared_pair_recovers_after_first_atomic_rename(
         assert result["status"] == "complete", result
     rig.tick()
     assert book.stat().st_ino == first_inode
-    assert (book / "Original.m4b").read_bytes() == audio.read_bytes()
-    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").exists()
+    assert (book / f"{BOOK_FILENAME_STEM}.m4b").read_bytes() == audio.read_bytes()
+    assert (Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub").exists()
 
 
 def test_queued_legacy_pair_routes_only_to_audiobook_library(rig, legacy_pair_routing):
@@ -129,7 +137,10 @@ def test_queued_legacy_pair_routes_only_to_audiobook_library(rig, legacy_pair_ro
     assert result["status"] == "complete", result
     assert result["destinations"] == {"audio": job["destinations"]["audio"]}
     folder = Path(result["destinations"]["audio"])
-    assert sorted(entry.name for entry in folder.iterdir()) == ["Orbit.epub", "Original.m4b"]
+    assert sorted(entry.name for entry in folder.iterdir()) == [
+        f"{BOOK_FILENAME_STEM}.epub",
+        f"{BOOK_FILENAME_STEM}.m4b",
+    ]
     assert not Path(job["destinations"]["ebook"]).exists()
 
 
@@ -323,10 +334,20 @@ def test_metadata_conflict_needs_approval(rig):
     result = get_job(rig, job["id"])
     assert result["review_kind"] == "metadata"
     assert not Path(job["destinations"]["ebook"]).exists()
-    action(rig, job["id"], "approve")
+    action(rig, job["id"], "approve", author="Ada / Reed", title="The title: I chose")
     rig.tick()
-    assert get_job(rig, job["id"])["status"] == "complete"
-    assert Path(job["destinations"]["ebook"]).name == "The title I chose"
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    folder = Path(result["destinations"]["ebook"])
+    assert folder.name == "The title_ I chose"
+    assert (folder / "Ada _ Reed - The title_ I chose.epub").is_file()
+
+
+def test_long_book_filename_keeps_author_and_title_within_byte_limit():
+    filename = book_file_stem("é" * 200, "界" * 200) + ".epub"
+    assert len(filename.encode()) <= 255
+    assert filename.startswith("é")
+    assert " - 界" in filename
 
 
 def test_title_traversal_is_sanitized_and_source_escape_is_rejected(rig):
@@ -375,8 +396,8 @@ def test_permissions_are_applied_to_published_media(rig):
     assert get_job(rig, job["id"])["status"] == "complete"
     path = Path(job["destinations"]["ebook"])
     assert stat.S_IMODE(path.stat().st_mode) == 0o750
-    assert stat.S_IMODE((path / "Orbit.epub").stat().st_mode) == 0o640
-    assert (path / "Orbit.epub").stat().st_uid == os.geteuid()
+    assert stat.S_IMODE((path / f"{BOOK_FILENAME_STEM}.epub").stat().st_mode) == 0o640
+    assert (path / f"{BOOK_FILENAME_STEM}.epub").stat().st_uid == os.geteuid()
 
 
 def test_permission_errors_are_actionable_and_retriable(rig, monkeypatch):
@@ -450,7 +471,7 @@ def test_unsupported_directory_sync_still_imports(rig, monkeypatch):
     result = get_job(rig, job["id"])
     assert result["status"] == "complete", result
     assert file_syncs and all(file_syncs)
-    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").is_file()
+    assert (Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub").is_file()
 
 
 @pytest.mark.parametrize("code", [errno.EINVAL, errno.ENOTSUP])
@@ -464,7 +485,7 @@ def test_retry_prepared_import_when_mount_cannot_rename_exclusively(rig, monkeyp
     failed = get_job(rig, job["id"])
     assert failed["status"] == "failed" and failed["prepared"]
     stage = rig.deployment.ebook_mount / ".shelfshuttle" / f"{job['id']}-ebook"
-    expected = (stage / "Orbit.epub").read_bytes()
+    expected = (stage / f"{BOOK_FILENAME_STEM}.epub").read_bytes()
 
     def unsupported(*args):
         raise OSError(code, "Unsupported rename")
@@ -474,7 +495,9 @@ def test_retry_prepared_import_when_mount_cannot_rename_exclusively(rig, monkeyp
     rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "complete", result
-    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").read_bytes() == expected
+    assert (
+        Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub"
+    ).read_bytes() == expected
     assert not stage.exists()
 
 
@@ -496,7 +519,7 @@ def test_exclusive_copy_rejects_directory_created_during_publish(rig, monkeypatc
 
 def test_exclusive_copy_does_not_overwrite_a_file_in_the_reserved_directory(rig, monkeypatch):
     job = submit(rig)
-    destination = Path(job["destinations"]["ebook"]) / "Orbit.epub"
+    destination = Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub"
     copy_staged_file = importing._copy_staged_file
 
     def unsupported(*args):
@@ -562,7 +585,7 @@ def test_nonconforming_epub_marker_is_normalized_on_import(rig, mimetype):
     rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "complete", result
-    destination = Path(job["destinations"]["ebook"]) / "Orbit.epub"
+    destination = Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub"
     with ZipFile(destination) as repaired, ZipFile(io.BytesIO(raw)) as original:
         first = repaired.infolist()[0]
         assert first.filename == "mimetype" and first.header_offset == 0

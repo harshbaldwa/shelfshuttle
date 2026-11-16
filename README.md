@@ -8,7 +8,7 @@ ShelfShuttle is a self-hosted ebook and audiobook intake manager. Upload an EPUB
 
 - Add an ebook, an audiobook, or a paired edition. ShelfShuttle suggests author and title from the EPUB and previews folders using the names you confirm.
 - Start downloads with a BitTorrent v1 magnet or info hash and track actual qBittorrent progress through restarts.
-- Import an EPUB, a single M4B, or MP3 tracks with their original filenames and disc structure. A paired edition puts the EPUB beside the audio in one audiobook library folder.
+- Import EPUBs and single M4Bs as `Author - Title`. MP3s keep their original filenames and disc structure. A paired edition puts the EPUB beside the audio in one audiobook library folder.
 - Review mismatched tags, existing destinations, and duplicate torrents. Retry failed jobs from the dashboard.
 - Validate sources in dry-run mode. Imports stage copies outside watched folders and use an atomic rename or exclusive file copies to protect existing files.
 - Run with one authenticated admin, responsive light and dark themes, an optional API token, and non-root Docker defaults.

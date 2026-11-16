@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from conftest import AUTH, DIGEST, PASSWORD, epub_bytes, write_audio
+from conftest import AUTH, BOOK_FILENAME_STEM, DIGEST, PASSWORD, epub_bytes, write_audio
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -108,8 +108,8 @@ def test_add_book_form_imports_pair_with_misordered_epub_marker(rig):
     folder = rig.deployment.audiobook_mount / "library" / "Ada Reed" / "A Small Orbit"
     assert preview.json() == job["destinations"] == {"audio": str(folder)}
     assert sorted(file.name for file in Path(job["destinations"]["audio"]).iterdir()) == [
-        "Orbit.epub",
-        "Orbit.m4b",
+        f"{BOOK_FILENAME_STEM}.epub",
+        f"{BOOK_FILENAME_STEM}.m4b",
     ]
     assert not rig.deployment.ebook_mount.exists()
 

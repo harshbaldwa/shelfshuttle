@@ -57,7 +57,7 @@ def relative_parts(value: str, *, archive: bool = False) -> tuple[str, ...]:
     return parts
 
 
-def clean_component(value: str) -> str:
+def clean_component(value: str, *, max_bytes: int = 180) -> str:
     value = unicodedata.normalize("NFC", value)
     value = "".join(
         "_" if char in '/\\<>:"|?*' or unicodedata.category(char).startswith("C") else char
@@ -66,10 +66,21 @@ def clean_component(value: str) -> str:
     value = value.strip(" .")
     if re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", value):
         value = f"_{value}"
-    value = value.encode()[:180].decode(errors="ignore").rstrip(" .")
+    value = value.encode()[:max_bytes].decode(errors="ignore").rstrip(" .")
     if not value:
         raise UnsafePath("Author, title and naming template must produce nonempty names.")
     return value
+
+
+def book_file_stem(author: str, title: str) -> str:
+    author, title = clean_component(author), clean_component(title)
+    available = 255 - len(" - .epub")
+    if len(author.encode()) + len(title.encode()) > available:
+        author = clean_component(
+            author, max_bytes=max(available // 2, available - len(title.encode()))
+        )
+        title = clean_component(title, max_bytes=available - len(author.encode()))
+    return f"{author} - {title}"
 
 
 def book_folder(template: str, author: str, title: str) -> Path:

@@ -22,6 +22,7 @@ MAGNET = f"magnet:?xt=urn:btih:{DIGEST}&dn=Synthetic"
 TOKEN = "test-token-" + "x" * 32
 PASSWORD = "test-password-" + "x" * 20
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+BOOK_FILENAME_STEM = "Ada Reed - A Small Orbit"
 
 
 def epub_bytes(

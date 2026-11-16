@@ -2,7 +2,7 @@ import errno
 import re
 from pathlib import Path
 
-from conftest import AUTH, DIGEST, epub_bytes, get_job, torrent, write_audio
+from conftest import AUTH, BOOK_FILENAME_STEM, DIGEST, epub_bytes, get_job, torrent, write_audio
 from test_web import sign_in
 
 from app.models.database import queue_lock
@@ -71,7 +71,7 @@ def test_delete_cannot_race_worker_or_remove_completed_job(rig):
     rig.tick()
     assert get_job(rig, job["id"])["status"] == "complete"
     assert rig.client.delete(endpoint, headers=AUTH).status_code == 409
-    assert (Path(job["destinations"]["ebook"]) / "Orbit.epub").is_file()
+    assert (Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub").is_file()
 
 
 def test_worker_finishes_deletion_after_cleanup_failure(rig, monkeypatch):
@@ -128,9 +128,9 @@ def test_delete_preserves_published_half_of_legacy_pair(rig, monkeypatch, legacy
     result = get_job(rig, job["id"])
     assert result["status"] == "failed" and result["prepared"], result
     published = Path(job["destinations"]["audio"])
-    assert (published / "Orbit.epub").is_file()
+    assert (published / f"{BOOK_FILENAME_STEM}.epub").is_file()
     assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204
-    assert (published / "Orbit.epub").is_file()
-    assert (published / audio.name).read_bytes() == audio.read_bytes()
+    assert (published / f"{BOOK_FILENAME_STEM}.epub").is_file()
+    assert (published / f"{BOOK_FILENAME_STEM}.m4b").read_bytes() == audio.read_bytes()
     assert not Path(job["destinations"]["ebook"]).exists()
     assert not (rig.deployment.ebook_mount / ".shelfshuttle" / f"{job['id']}-ebook").exists()

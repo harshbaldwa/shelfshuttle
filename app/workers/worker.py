@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.core.paths import UnsafePath, describe_filesystem_error, regular_file
+from app.core.paths import UnsafePath, book_file_stem, describe_filesystem_error, regular_file
 from app.models.database import Job, queue_lock
 from app.services.importing import (
     NeedsReview,
@@ -148,6 +148,7 @@ class Worker:
         job.status = "importing"
         session.commit()
         provider = PROVIDERS[settings.metadata_provider]
+        stem = book_file_stem(job.author, job.title)
         ebook = []
         tagged = []
         metadata = {}
@@ -162,19 +163,22 @@ class Worker:
                 if stamp[2] > self.settings.deployment.upload_limit:
                     raise InvalidMedia("The EPUB exceeds the configured upload limit.")
                 book = provider.ebook(source)
-                ebook.append(Source(path, Path(path.name), stamp))
+                ebook.append(Source(path, Path(f"{stem}.epub"), stamp))
             metadata["ebook"] = book.public()
             cover = book.cover
             warnings.update(f"EPUB {field}" for field in mismatches(book, job.author, job.title))
         audio_sources = []
         for path, name, size in audio:
+            suffix = path.suffix.lower()
+            if suffix == ".m4b":
+                name = Path(f"{stem}.m4b")
             with regular_file(path) as source:
                 stamp = Source.signature(source.fileno())
                 if stamp[2] != size:
                     raise InvalidMedia(
                         "A downloaded file does not match the size reported by qBittorrent."
                     )
-                book = provider.audio(source, path.suffix.lower())
+                book = provider.audio(source, suffix)
                 audio_sources.append(Source(path, name, stamp))
             warnings.update(f"audio {field}" for field in mismatches(book, job.author, job.title))
             tagged.append((name, book))
