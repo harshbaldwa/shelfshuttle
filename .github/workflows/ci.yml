@@ -35,11 +35,12 @@ jobs:
       - name: Start an isolated Compose deployment
         run: |
           umask 077
-          printf 'SHELFSHUTTLE_ADMIN_PASSWORD=%s\n' "$(python3 -c 'import secrets; print(secrets.token_hex(24))')" > .env
+          cp .env.example .env
           docker compose up --detach --build --wait --wait-timeout 90
-      - name: Check health and volume access
+      - name: Check health, volume access, and network exposure
         run: |
-          curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+          test "$(docker inspect -f '{{len .HostConfig.PortBindings}}' "$(docker compose ps -q shelfshuttle)")" = 0
+          docker compose exec -T shelfshuttle python -c 'import urllib.request; assert urllib.request.urlopen("http://127.0.0.1:8080/healthz", timeout=4).status == 200'
           docker compose exec -T shelfshuttle python -c 'import os; assert os.getuid() != 0; assert all(os.access(p, os.W_OK) for p in ("/app/data", "/app/intake", "/media/audiobooks", "/media/ebooks"))'
       - if: failure()
         run: docker compose logs

@@ -2,7 +2,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -23,7 +23,7 @@ from app.api.jobs import (
     upload_field,
 )
 from app.core.config import Settings
-from app.core.security import authenticated, csrf_token, protect
+from app.core.security import csrf_token, protect
 from app.models.database import Job
 from app.services.importing import destinations
 from app.services.intake import cover_bytes, inspect_upload
@@ -85,18 +85,6 @@ def view(request, template, status_code=200, **context):
         },
         status_code=status_code,
     )
-
-
-def login_redirect():
-    return RedirectResponse("/login", 303)
-
-
-def require_auth(request: Request):
-    if not authenticated(request):
-        raise HTTPException(401, "Sign in or use a configured API bearer token.")
-
-
-api_router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 def settings_view(runtime):
@@ -170,64 +158,25 @@ def health(request: Request):
     return {"status": "ok"}
 
 
-@router.get("/login", response_class=HTMLResponse, include_in_schema=False)
-def login_page(request: Request):
-    if authenticated(request):
-        return RedirectResponse("/", 303)
-    return view(request, "login.html")
-
-
-@router.post("/login", response_class=HTMLResponse, include_in_schema=False)
-async def login(request: Request):
-    runtime = request.app.state.runtime
-    async with form(request) as data:
-        try:
-            protect(request, data)
-            runtime.login.login(
-                runtime.deployment, str(data.get("username", "")), str(data.get("password", ""))
-            )
-        except HTTPException as exc:
-            return view(request, "login.html", exc.status_code, error=issue(exc))
-    request.session.clear()
-    request.session["admin"] = True
-    csrf_token(request)
-    return RedirectResponse("/", 303)
-
-
-@router.post("/logout", include_in_schema=False)
-async def logout(request: Request):
-    async with form(request) as data:
-        protect(request, data)
-    request.session.clear()
-    return login_redirect()
-
-
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 def dashboard(request: Request, batch: Annotated[int, Query(ge=1, le=1_000_000)] = 1):
-    if not authenticated(request):
-        return login_redirect()
     runtime = request.app.state.runtime
     return view(request, "dashboard.html", page="dashboard", **dashboard_view(runtime, batch))
 
 
 @router.get("/dashboard/content", response_class=HTMLResponse, include_in_schema=False)
 def dashboard_content(request: Request, batch: Annotated[int, Query(ge=1, le=1_000_000)] = 1):
-    require_auth(request)
     return view(request, "joblist.html", **dashboard_view(request.app.state.runtime, batch))
 
 
 @router.get("/add", response_class=HTMLResponse, include_in_schema=False)
 def add_page(request: Request):
-    if not authenticated(request):
-        return login_redirect()
     limit = request.app.state.deployment.max_upload_mib
     return view(request, "add.html", page="add", limit=limit, values={})
 
 
 @router.post("/add", response_class=HTMLResponse, include_in_schema=False)
 async def add_book(request: Request):
-    if not authenticated(request):
-        return login_redirect()
     runtime = request.app.state.runtime
     async with form(request) as data:
         try:
@@ -249,8 +198,6 @@ async def add_book(request: Request):
 
 @router.post("/jobs/{job_id}/action", include_in_schema=False)
 async def action_page(request: Request, job_id: str):
-    if not authenticated(request):
-        return login_redirect()
     runtime = request.app.state.runtime
     async with form(request) as data:
         try:
@@ -274,8 +221,6 @@ async def action_page(request: Request, job_id: str):
 
 @router.get("/settings", response_class=HTMLResponse, include_in_schema=False)
 def settings_page(request: Request):
-    if not authenticated(request):
-        return login_redirect()
     return view(
         request,
         "settings.html",
@@ -295,8 +240,6 @@ def update_settings(runtime, updates):
 
 @router.post("/settings", include_in_schema=False)
 async def save_settings(request: Request):
-    if not authenticated(request):
-        return login_redirect()
     runtime = request.app.state.runtime
     values = await run_in_threadpool(settings_view, runtime)
     async with form(request) as data:
@@ -331,7 +274,12 @@ async def save_settings(request: Request):
     return RedirectResponse("/settings?saved=1", 303)
 
 
-@api_router.get("/api/jobs")
+@router.get("/api/csrf")
+def csrf_api(request: Request):
+    return {"token": csrf_token(request)}
+
+
+@router.get("/api/jobs")
 def jobs(
     request: Request,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -344,7 +292,7 @@ def jobs(
         return [public_job(job) for job in entries]
 
 
-@api_router.post("/api/jobs", status_code=201)
+@router.post("/api/jobs", status_code=201)
 async def add_api(request: Request):
     async with form(request) as data:
         protect(request, data)
@@ -354,13 +302,13 @@ async def add_api(request: Request):
             raise HTTPException(422, issue(exc)) from exc
 
 
-@api_router.get("/api/jobs/{job_id}")
+@router.get("/api/jobs/{job_id}")
 def job_api(request: Request, job_id: str):
     with request.app.state.runtime.db() as session:
         return public_job(get_job(session, job_id))
 
 
-@api_router.get("/api/jobs/{job_id}/cover")
+@router.get("/api/jobs/{job_id}/cover")
 def cover_api(request: Request, job_id: str):
     runtime = request.app.state.runtime
     with runtime.db() as session:
@@ -373,14 +321,14 @@ def cover_api(request: Request, job_id: str):
         raise HTTPException(404, "No cover is available.") from exc
 
 
-@api_router.delete("/api/jobs/{job_id}", status_code=204)
+@router.delete("/api/jobs/{job_id}", status_code=204)
 def delete_api(request: Request, job_id: str):
     protect(request)
     delete_job(request.app.state.runtime, job_id)
     return Response(status_code=204)
 
 
-@api_router.post("/api/jobs/{job_id}/action")
+@router.post("/api/jobs/{job_id}/action")
 async def action_api(request: Request, job_id: str):
     protect(request)
     data = await json_object(request)
@@ -390,7 +338,7 @@ async def action_api(request: Request, job_id: str):
         raise HTTPException(422, issue(exc)) from exc
 
 
-@api_router.get("/api/destinations")
+@router.get("/api/destinations")
 def preview(
     request: Request,
     author: Annotated[str, Query(max_length=200)],
@@ -408,7 +356,7 @@ def preview(
         raise HTTPException(422, issue(exc)) from exc
 
 
-@api_router.post("/api/epub/inspect")
+@router.post("/api/epub/inspect")
 async def inspect(request: Request):
     runtime = request.app.state.runtime
     async with form(request) as data:
@@ -428,12 +376,12 @@ async def inspect(request: Request):
         return book.public()
 
 
-@api_router.get("/api/settings")
+@router.get("/api/settings")
 def settings_api(request: Request):
     return settings_view(request.app.state.runtime)
 
 
-@api_router.patch("/api/settings")
+@router.patch("/api/settings")
 async def patch_settings(request: Request):
     protect(request)
     updates = await json_object(request)
@@ -443,7 +391,7 @@ async def patch_settings(request: Request):
         raise HTTPException(422, issue(exc)) from exc
 
 
-@api_router.post("/api/settings/test-qbittorrent")
+@router.post("/api/settings/test-qbittorrent")
 def test_qbittorrent(request: Request):
     protect(request)
     runtime = request.app.state.runtime

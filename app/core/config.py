@@ -100,22 +100,12 @@ class Deployment(BaseModel):
     intake_mount: Path = Path("/app/intake")
     audiobook_mount: Path = Path("/media/audiobooks")
     ebook_mount: Path = Path("/media/ebooks")
-    admin_username: str = Field("admin", min_length=1, max_length=100)
-    admin_password: SecretStr
-    api_token: SecretStr = SecretStr("")
     cookie_secure: bool = True
     max_upload_mib: int = Field(64, ge=1, le=512)
     worker_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_deployment(self):
-        if len(self.admin_password.get_secret_value()) < 16:
-            raise ValueError("Set SHELFSHUTTLE_ADMIN_PASSWORD to at least 16 characters.")
-        token = self.api_token.get_secret_value()
-        if token and (not token.isascii() or len(token) < 32 or any(c.isspace() for c in token)):
-            raise ValueError(
-                "Use at least 32 printable non-space ASCII characters for the API token."
-            )
         for key in ("data", "downloads_mount", "intake_mount", "audiobook_mount", "ebook_mount"):
             absolute_path(str(getattr(self, key)))
         return self
@@ -170,9 +160,7 @@ def environment(fields: dict, secret_fields: set[str]) -> dict:
 
 
 def deployment_from_env() -> Deployment:
-    return Deployment.model_validate(
-        environment(Deployment.model_fields, {"admin_password", "api_token"})
-    )
+    return Deployment.model_validate(environment(Deployment.model_fields, set()))
 
 
 def private_key(directory: Path) -> bytes:

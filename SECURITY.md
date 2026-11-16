@@ -4,4 +4,4 @@ Use the latest tagged release once available. Report suspected vulnerabilities t
 
 Include the affected version, a concise description, and a reproduction using synthetic data. Redact hostnames, tokens, cookies, paths identifying your library, and other personal details. Coordinate publication with maintainers so users can update.
 
-Use HTTPS behind a reverse proxy for remote access. Keep authentication enabled, use a strong unique admin password, protect the state directory and backups, and mount only the directories ShelfShuttle needs.
+Use HTTPS and require reverse-proxy authentication on every route to ShelfShuttle. Keep its container port on a trusted Docker network and protect the state directory, backups, and mounted libraries.

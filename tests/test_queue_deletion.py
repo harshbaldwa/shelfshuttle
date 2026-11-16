@@ -2,8 +2,15 @@ import errno
 import re
 from pathlib import Path
 
-from conftest import AUTH, BOOK_FILENAME_STEM, DIGEST, epub_bytes, get_job, torrent, write_audio
-from test_web import sign_in
+from conftest import (
+    BOOK_FILENAME_STEM,
+    DIGEST,
+    csrf_headers,
+    epub_bytes,
+    get_job,
+    torrent,
+    write_audio,
+)
 
 from app.models.database import queue_lock
 from app.services import importing, queue
@@ -15,7 +22,7 @@ def test_delete_through_dashboard_removes_upload_and_cover(rig):
     upload = rig.deployment.intake_mount / job_id / "Orbit.epub"
     cover = rig.deployment.data / "covers" / f"{job_id}.jpg"
     assert upload.is_file() and cover.is_file()
-    page = sign_in(rig.client)
+    page = rig.client.get("/")
     assert "Delete from queue" in page.text
     csrf = re.search(r'meta name="csrf-token" content="([^"]+)"', page.text)[1]
     action = f"/jobs/{job_id}/action"
@@ -25,7 +32,7 @@ def test_delete_through_dashboard_removes_upload_and_cover(rig):
         action, data={"intent": "delete", "_csrf": csrf}, follow_redirects=False
     )
     assert response.status_code == 303
-    assert rig.client.get(f"/api/jobs/{job_id}", headers=AUTH).status_code == 404
+    assert rig.client.get(f"/api/jobs/{job_id}").status_code == 404
     assert not upload.parent.exists()
     assert not cover.exists()
     rig.tick()
@@ -41,8 +48,8 @@ def test_delete_download_job_preserves_qbittorrent_and_files(rig):
     assert get_job(rig, job["id"])["status"] == "downloading"
     requests = rig.fake.requests.copy()
     endpoint = f"/api/jobs/{job['id']}"
-    assert rig.client.delete(endpoint).status_code == 401
-    assert rig.client.delete(endpoint, headers=AUTH).status_code == 204
+    assert rig.client.delete(endpoint).status_code == 403
+    assert rig.client.delete(endpoint, headers=csrf_headers(rig.client)).status_code == 204
     rig.tick()
     assert rig.fake.requests == requests
     assert source.read_bytes() == b"test download"
@@ -56,7 +63,10 @@ def test_delete_conflict_preserves_existing_library_book(rig):
     library_book.write_bytes(b"test existing book")
     rig.tick()
     assert get_job(rig, job["id"])["status"] == "review"
-    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204
+    assert (
+        rig.client.delete(f"/api/jobs/{job['id']}", headers=csrf_headers(rig.client)).status_code
+        == 204
+    )
     assert library_book.read_bytes() == b"test existing book"
 
 
@@ -65,12 +75,12 @@ def test_delete_cannot_race_worker_or_remove_completed_job(rig):
     endpoint = f"/api/jobs/{job['id']}"
     with queue_lock(rig.deployment.data) as locked:
         assert locked
-        response = rig.client.delete(endpoint, headers=AUTH)
+        response = rig.client.delete(endpoint, headers=csrf_headers(rig.client))
         assert response.status_code == 409
         assert "busy" in response.json()["detail"]
     rig.tick()
     assert get_job(rig, job["id"])["status"] == "complete"
-    assert rig.client.delete(endpoint, headers=AUTH).status_code == 409
+    assert rig.client.delete(endpoint, headers=csrf_headers(rig.client)).status_code == 409
     assert (Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub").is_file()
 
 
@@ -83,10 +93,10 @@ def test_worker_finishes_deletion_after_cleanup_failure(rig, monkeypatch):
 
     with monkeypatch.context() as patch:
         patch.setattr(queue, "remove_job_intake", temporarily_unwritable)
-        assert rig.client.delete(endpoint, headers=AUTH).status_code == 409
+        assert rig.client.delete(endpoint, headers=csrf_headers(rig.client)).status_code == 409
         assert get_job(rig, job["id"])["status"] == "deleting"
     rig.tick()
-    assert rig.client.get(endpoint, headers=AUTH).status_code == 404
+    assert rig.client.get(endpoint).status_code == 404
     assert not (rig.deployment.intake_mount / job["id"]).exists()
     assert not Path(job["destinations"]["ebook"]).exists()
 
@@ -105,8 +115,11 @@ def test_failed_publish_shows_delete_and_exact_filesystem_error(rig, monkeypatch
     assert result["status"] == "failed" and result["prepared"], result
     assert f"Publishing library directory at {destination} failed (EIO)" in result["detail"]
     assert stage.is_dir()
-    assert "Delete from queue" in sign_in(rig.client).text
-    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204
+    assert "Delete from queue" in rig.client.get("/").text
+    assert (
+        rig.client.delete(f"/api/jobs/{job['id']}", headers=csrf_headers(rig.client)).status_code
+        == 204
+    )
     assert not stage.exists()
     assert not destination.exists()
 
@@ -129,7 +142,10 @@ def test_delete_preserves_published_half_of_legacy_pair(rig, monkeypatch, legacy
     assert result["status"] == "failed" and result["prepared"], result
     published = Path(job["destinations"]["audio"])
     assert (published / f"{BOOK_FILENAME_STEM}.epub").is_file()
-    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 204
+    assert (
+        rig.client.delete(f"/api/jobs/{job['id']}", headers=csrf_headers(rig.client)).status_code
+        == 204
+    )
     assert (published / f"{BOOK_FILENAME_STEM}.epub").is_file()
     assert (published / f"{BOOK_FILENAME_STEM}.m4b").read_bytes() == audio.read_bytes()
     assert not Path(job["destinations"]["ebook"]).exists()

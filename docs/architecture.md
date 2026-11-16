@@ -15,8 +15,8 @@ The worker never modifies or removes torrent content. Existing library entries a
 
 ## State and trust
 
-- The state volume holds the encrypted qBittorrent password, a separate private key file, signed-session key material, and SQLite state. Back up the state and intake together. Protect the state volume and backups as sensitive because they contain both the ciphertext and its key.
-- The application uses an HTTP-only, same-site session cookie, per-session CSRF tokens, a login rate limit, and optional bearer-token auth. Use HTTPS for network access.
-- The authenticated admin and deployment configuration are trusted. An admin can configure a qBittorrent endpoint, so use network controls if ShelfShuttle must be prevented from reaching other services.
+- The state volume holds the encrypted qBittorrent password, a separate private key file, and SQLite state. ShelfShuttle derives a separate CSRF signing key from that file. Back up the state and intake together and restrict access to the backups.
+- The reverse proxy authenticates requests. The application uses an HTTP-only, same-site cookie and CSRF tokens for changes. Keep the backend reachable only by trusted network peers.
+- Users admitted by the proxy can manage jobs and configure the qBittorrent endpoint. Apply your access rules at the proxy and use network controls to limit which services ShelfShuttle can reach.
 - Mount downloaded files read-only. Library directories, staging roots, and the state and intake volumes must be writable by the process within the configured mount boundaries. Keep other applications from writing to private staging.
 - Filename normalization can map different titles to the same path. A collision enters review. Imports require a filesystem that supports atomic exclusive directory rename and directory synchronization.

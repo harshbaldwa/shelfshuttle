@@ -1,6 +1,5 @@
 services:
   shelfshuttle:
-    ports: !reset []
     networks:
       - proxy
 

@@ -8,9 +8,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.api.routes import ROOT, api_router, router
+from app.api.routes import ROOT, router
 from app.core.config import deployment_from_env, private_key
-from app.core.security import LoginLimiter, RequestPolicy, session_secret
+from app.core.security import RequestPolicy, csrf_signing_key
 from app.core.settings import SettingsStore
 from app.models.database import database
 from app.services.qbittorrent import QBittorrent
@@ -31,10 +31,9 @@ def create_app(deployment=None, *, overrides=None, worker_client=None) -> FastAP
                 deployment=config,
                 db=db,
                 settings=store,
-                login=LoginLimiter(),
                 qbittorrent=worker_client or QBittorrent,
             )
-            app.state.session_key = session_secret(key, config)
+            app.state.csrf_key = csrf_signing_key(key)
             stop = Event()
             worker = Worker(db, store, app.state.runtime.qbittorrent)
             app.state.worker = worker
@@ -55,7 +54,7 @@ def create_app(deployment=None, *, overrides=None, worker_client=None) -> FastAP
 
     app = FastAPI(
         title="ShelfShuttle",
-        version="0.1.6",
+        version="0.2.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -83,8 +82,12 @@ def create_app(deployment=None, *, overrides=None, worker_client=None) -> FastAP
                 self.http = RequestPolicy(
                     SessionMiddleware(
                         self.inner,
-                        secret_key=app.state.session_key,
-                        session_cookie="shelfshuttle_session",
+                        secret_key=app.state.csrf_key,
+                        session_cookie=(
+                            "__Host-shelfshuttle_csrf"
+                            if config.cookie_secure
+                            else "shelfshuttle_csrf"
+                        ),
                         max_age=12 * 60 * 60,
                         same_site="strict",
                         https_only=config.cookie_secure,
@@ -96,7 +99,6 @@ def create_app(deployment=None, *, overrides=None, worker_client=None) -> FastAP
     app.add_middleware(StartupPolicy)
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     app.include_router(router)
-    app.include_router(api_router)
     return app
 
 

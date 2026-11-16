@@ -60,7 +60,7 @@ class QBittorrent:
         self.settings = settings
         self.client = httpx.Client(
             base_url=settings.qbit_url + "/api/v2/",
-            headers={"Referer": settings.qbit_url + "/", "User-Agent": "ShelfShuttle/0.1.6"},
+            headers={"Referer": settings.qbit_url + "/", "User-Agent": "ShelfShuttle/0.2.0"},
             timeout=httpx.Timeout(10, connect=5),
             follow_redirects=False,
             trust_env=False,

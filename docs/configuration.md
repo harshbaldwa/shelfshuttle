@@ -8,10 +8,7 @@ All paths are paths inside ShelfShuttle unless identified as Compose source path
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SHELFSHUTTLE_ADMIN_USERNAME` | `admin` | Admin login name. |
-| `SHELFSHUTTLE_ADMIN_PASSWORD` | Required | Unique password of at least 16 characters. |
-| `SHELFSHUTTLE_API_TOKEN` | Empty | Optional bearer token of at least 32 printable ASCII characters. |
-| `SHELFSHUTTLE_COOKIE_SECURE` | `true` | Send the session cookie over HTTPS. Set `false` for loopback HTTP development. |
+| `SHELFSHUTTLE_COOKIE_SECURE` | `true` | Send the CSRF cookie over HTTPS. Set `false` for loopback HTTP development. |
 | `SHELFSHUTTLE_MAX_UPLOAD_MIB` | `64` | Compressed EPUB size limit, from 1 to 512 MiB. Set a matching request limit and timeout in your proxy. |
 | `SHELFSHUTTLE_DATA` | `/app/data` | State directory for SQLite, encryption key, covers, and the worker lock. It needs a local filesystem and write access restricted to the process owner. |
 | `SHELFSHUTTLE_DOWNLOADS_MOUNT` | `/downloads` | Allowed download mount root. Mount read-only. |
@@ -20,11 +17,10 @@ All paths are paths inside ShelfShuttle unless identified as Compose source path
 | `SHELFSHUTTLE_EBOOK_MOUNT` | `/media/ebooks` | Allowed ebook library and staging mount root. |
 | `SHELFSHUTTLE_WORKER_ENABLED` | `true` | Run the background worker. With the worker disabled, the UI and API can still queue jobs. |
 | `SHELFSHUTTLE_PUID`, `SHELFSHUTTLE_PGID` | `10001`, `10001` | Build and run the Compose service with these non-root IDs. Use IDs that can access your bind mounts. |
-| `SHELFSHUTTLE_BIND`, `SHELFSHUTTLE_PORT` | `127.0.0.1`, `8080` | Compose loopback address and port. Use the proxy override for HTTPS. |
 | `SHELFSHUTTLE_{DATA,INTAKE,DOWNLOADS,AUDIOBOOK,EBOOK}_SOURCE` | Corresponding named volume | Compose volume name or absolute host path. |
 | `SHELFSHUTTLE_PROXY_NETWORK` | Unset | Name of the existing external network when applying the proxy override. |
 
-For `ADMIN_PASSWORD`, `API_TOKEN`, and `QBIT_PASSWORD`, you can set the corresponding `SHELFSHUTTLE_…_FILE` variable to a readable, mounted secret file instead of passing the value through the environment. For example, attach a secret from a Compose override and set `SHELFSHUTTLE_ADMIN_PASSWORD_FILE=/run/secrets/shelfshuttle_admin`. Remove the direct password variable, even if it was empty. Protect the host files and any backups.
+Set `SHELFSHUTTLE_QBIT_PASSWORD_FILE` to a readable, mounted secret file if you prefer to supply the qBittorrent password that way. Remove the direct password variable before setting the file path.
 
 Choose your UID and GID before creating the named volumes. Docker initializes fresh volumes from the image. If you change IDs on an existing deployment, migrate ownership of its state and intake storage before starting the rebuilt service.
 
@@ -55,10 +51,11 @@ Use a dedicated category per ShelfShuttle deployment and a directory writable by
 
 ## API
 
-Protected API routes accept the signed session cookie or a configured `Authorization: Bearer <token>` header. Session-authenticated mutations require `X-CSRF-Token` from the page's `csrf-token` meta tag. The health probe at `GET /healthz` returns a minimal status without credentials.
+The reverse proxy authenticates API requests. For a POST, PATCH, or DELETE request, first call `GET /api/csrf` and keep its cookie. Send that cookie and the returned token in the `X-CSRF-Token` header on writes. The browser UI handles this automatically. Send any authentication required by your proxy on both requests. The internal health probe at `GET /healthz` returns a minimal status.
 
 | Method and path | Purpose |
 | --- | --- |
+| `GET /api/csrf` | Obtain the request token and its matching cookie for API writes. |
 | `GET /api/jobs?limit=50&offset=0` | List job summaries. Page size is capped at 100. |
 | `POST /api/jobs` | Submit multipart fields `format` (`audio`, `ebook`, `combined`), `author`, `title`, and the applicable `epub` file and/or `torrent`. Audio-only forms may also be URL encoded. |
 | `GET /api/jobs/{id}` | Retrieve job status, destinations, progress from 0 to 1, and extracted tags. |
@@ -71,9 +68,14 @@ Protected API routes accept the signed session cookie or a configured `Authoriza
 | `PATCH /api/settings` | Send a JSON object of lower-case runtime setting keys. Set `qbit_password` to an empty string to clear it. |
 | `POST /api/settings/test-qbittorrent` | Check access using saved settings and return the Web API version. |
 
+For the loopback-only development server, the following example uses `curl` and `jq`:
+
 ```sh
-curl -fsS http://localhost:8080/api/jobs \
-  -H "Authorization: Bearer $SHELFSHUTTLE_API_TOKEN" \
+base=http://127.0.0.1:8080
+cookies=$(mktemp)
+trap 'rm -f "$cookies"' EXIT
+csrf=$(curl -fsS -c "$cookies" "$base/api/csrf" | jq -er .token)
+curl -fsS -b "$cookies" -H "X-CSRF-Token: $csrf" "$base/api/jobs" \
   -F format=ebook -F 'author=Example Author' -F 'title=Example Book' \
   -F 'epub=@example.epub;type=application/epub+zip'
 ```

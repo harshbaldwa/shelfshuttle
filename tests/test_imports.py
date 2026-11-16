@@ -9,12 +9,12 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 import httpx
 import pytest
 from conftest import (
-    AUTH,
     BOOK_FILENAME_STEM,
     DIGEST,
     MAGNET,
     action,
     configure,
+    csrf_headers,
     epub_bytes,
     get_job,
     torrent,
@@ -40,9 +40,8 @@ def test_epub_only_metadata_and_cover(rig):
     assert job["metadata"]["ebook"]["series"] == "Example Orbit"
     assert job["metadata"]["ebook"]["language"] == "en"
     assert job["metadata"]["ebook"]["isbn"] == "9781234567897"
-    response = rig.client.get(job["cover_url"], headers=AUTH)
+    response = rig.client.get(job["cover_url"])
     assert response.headers["content-type"] == "image/jpeg"
-    assert rig.client.get(job["cover_url"]).status_code == 401
     rig.tick()
     result = get_job(rig, job["id"])
     assert result["status"] == "complete", result
@@ -113,13 +112,16 @@ def test_legacy_prepared_pair_recovers_after_first_atomic_rename(
     assert (book / f"{BOOK_FILENAME_STEM}.epub").exists()
     assert not Path(job["destinations"]["ebook"]).exists()
     assert get_job(rig, job["id"])["prepared"]
-    assert rig.client.delete(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 409
+    assert (
+        rig.client.delete(f"/api/jobs/{job['id']}", headers=csrf_headers(rig.client)).status_code
+        == 409
+    )
 
     monkeypatch.setattr(importing, "_rename_exclusive", rename)
     app = rig.app_factory()
     with TestClient(app) as client:
         app.state.worker.tick()
-        result = client.get(f"/api/jobs/{job['id']}", headers=AUTH).json()
+        result = client.get(f"/api/jobs/{job['id']}").json()
         assert result["status"] == "complete", result
     rig.tick()
     assert book.stat().st_ino == first_inode
@@ -566,7 +568,7 @@ def test_exclusive_copy_resumes_partial_mp3_after_restart(rig, monkeypatch):
     app = rig.app_factory()
     with TestClient(app) as client:
         app.state.worker.tick()
-        result = client.get(f"/api/jobs/{job['id']}", headers=AUTH).json()
+        result = client.get(f"/api/jobs/{job['id']}").json()
         assert result["status"] == "complete", result
     assert partial.stat().st_ino == original_inode
     for path in paths:
@@ -577,7 +579,7 @@ def test_exclusive_copy_resumes_partial_mp3_after_restart(rig, monkeypatch):
 def test_nonconforming_epub_marker_is_normalized_on_import(rig, mimetype):
     raw = epub_bytes(mimetype=mimetype, cover=True)
     inspected = rig.client.post(
-        "/api/epub/inspect", files={"epub": ("Orbit.epub", raw)}, headers=AUTH
+        "/api/epub/inspect", files={"epub": ("Orbit.epub", raw)}, headers=csrf_headers(rig.client)
     )
     assert inspected.status_code == 200, inspected.text
     assert inspected.json()["title"] == "A Small Orbit"

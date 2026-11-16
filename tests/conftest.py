@@ -19,9 +19,6 @@ from app.services.qbittorrent import QBittorrent
 
 DIGEST = "a" * 40
 MAGNET = f"magnet:?xt=urn:btih:{DIGEST}&dn=Synthetic"
-TOKEN = "test-token-" + "x" * 32
-PASSWORD = "test-password-" + "x" * 20
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
 BOOK_FILENAME_STEM = "Ada Reed - A Small Orbit"
 
 
@@ -235,8 +232,6 @@ def rig(tmp_path):
         intake_mount=root / "intake",
         audiobook_mount=root / "audiobooks",
         ebook_mount=root / "ebooks",
-        admin_password=PASSWORD,
-        api_token=TOKEN,
         cookie_secure=False,
         max_upload_mib=1,
         worker_enabled=False,
@@ -260,7 +255,7 @@ def rig(tmp_path):
         if kind in {"ebook", "combined"}:
             name, data = epub or ("Orbit.epub", epub_bytes())
             files["epub"] = (name, data, "application/epub+zip")
-        return client.post("/api/jobs", data=form, files=files, headers=AUTH)
+        return client.post("/api/jobs", data=form, files=files, headers=csrf_headers(client))
 
     app = app_factory()
     with TestClient(app) as client:
@@ -277,21 +272,29 @@ def rig(tmp_path):
         )
 
 
+def csrf_headers(client):
+    response = client.get("/api/csrf")
+    assert response.status_code == 200, response.text
+    return {"X-CSRF-Token": response.json()["token"]}
+
+
 def get_job(rig, job_id):
-    response = rig.client.get(f"/api/jobs/{job_id}", headers=AUTH)
+    response = rig.client.get(f"/api/jobs/{job_id}")
     assert response.status_code == 200, response.text
     return response.json()
 
 
 def action(rig, job_id, intent="retry", **fields):
     response = rig.client.post(
-        f"/api/jobs/{job_id}/action", headers=AUTH, json={"intent": intent, **fields}
+        f"/api/jobs/{job_id}/action",
+        headers=csrf_headers(rig.client),
+        json={"intent": intent, **fields},
     )
     assert response.status_code == 200, response.text
     return response.json()
 
 
 def configure(rig, **fields):
-    response = rig.client.patch("/api/settings", json=fields, headers=AUTH)
+    response = rig.client.patch("/api/settings", json=fields, headers=csrf_headers(rig.client))
     assert response.status_code == 200, response.text
     return response.json()

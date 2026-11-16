@@ -3,39 +3,22 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from conftest import AUTH, BOOK_FILENAME_STEM, DIGEST, PASSWORD, epub_bytes, write_audio
+from conftest import BOOK_FILENAME_STEM, DIGEST, csrf_headers, epub_bytes, write_audio
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.services.qbittorrent import torrent_input
 
 
-def sign_in(client):
-    page = client.get("/login")
-    assert page.status_code == 200, page.text
-    token = re.search(r'meta name="csrf-token" content="([^"]+)"', page.text)[1]
-    page = client.post(
-        "/login",
-        data={"username": "admin", "password": PASSWORD, "_csrf": token},
-        follow_redirects=False,
-    )
-    assert page.status_code == 303, page.text
-    cookie = page.headers["set-cookie"].lower()
-    assert "httponly" in cookie
-    assert "samesite=strict" in cookie
-    return client.get("/")
-
-
-def test_authentication_csrf_ui_and_cover(rig):
+def test_proxy_managed_access_and_browser_csrf(rig):
     client = rig.client
     assert client.get("/healthz").json() == {"status": "ok"}
-    assert client.get("/add", follow_redirects=False).headers["location"] == "/login"
-    assert client.get("/api/jobs").status_code == 401
-    assert client.get("/api/settings").status_code == 401
-    assert (
-        client.post("/login", data={"username": "admin", "password": PASSWORD}).status_code == 403
-    )
-    page = sign_in(client)
+    assert client.get("/api/jobs").json() == []
+    assert client.get("/api/settings").status_code == 200
+    assert client.get("/login").status_code == 404
+    assert client.post("/logout").status_code == 404
+    page = client.get("/")
+    assert page.status_code == 200
     assert "Your queue is empty" in page.text
     assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
     csrf = re.search(r'meta name="csrf-token" content="([^"]+)"', page.text)[1]
@@ -75,15 +58,34 @@ def test_authentication_csrf_ui_and_cover(rig):
     )
     assert response.status_code == 303, response.text
     assert "A Small Orbit" in client.get("/dashboard/content").text
-    assert client.post("/logout", data={"_csrf": csrf}, follow_redirects=False).status_code == 303
-    assert client.get("/api/jobs").status_code == 401
+
+
+def test_https_csrf_cookie_and_api_bootstrap(rig):
+    deployment = rig.deployment.model_copy(update={"cookie_secure": True})
+    app = create_app(deployment, overrides={})
+    with TestClient(app, base_url="https://testserver") as client:
+        response = client.get("/api/csrf")
+        cookie = response.headers["set-cookie"].lower()
+        assert cookie.startswith("__host-shelfshuttle_csrf=")
+        assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie
+        assert response.headers["cache-control"] == "no-store"
+        path = "/api/settings"
+        changes = {"dry_run": True}
+        assert client.patch(path, json=changes).status_code == 403
+        assert (
+            client.patch(path, json=changes, headers={"X-CSRF-Token": "invalid"}).status_code == 403
+        )
+        headers = {"X-CSRF-Token": response.json()["token"]}
+        assert client.patch(path, json=changes, headers=headers).status_code == 200
+        client.cookies.clear()
+        assert client.patch(path, json=changes, headers=headers).status_code == 403
 
 
 def test_add_book_form_imports_pair_with_misordered_epub_marker(rig):
     audio = write_audio(rig.downloads / "Orbit.m4b")
     rig.fake.complete(rig.downloads, [audio])
     client = rig.client
-    page = sign_in(client)
+    page = client.get("/add")
     csrf = re.search(r'meta name="csrf-token" content="([^"]+)"', page.text)[1]
     response = client.post(
         "/add",
@@ -99,7 +101,7 @@ def test_add_book_form_imports_pair_with_misordered_epub_marker(rig):
     )
     assert response.status_code == 303, response.text
     rig.tick()
-    (job,) = client.get("/api/jobs", headers=AUTH).json()
+    (job,) = client.get("/api/jobs").json()
     assert job["status"] == "complete", job
     preview = client.get(
         "/api/destinations",
@@ -118,7 +120,8 @@ def test_password_is_encrypted_and_environment_values_are_read_only(rig):
     app = create_app(rig.deployment, overrides={})
     password = "only-used-as-a-fake-password"
     with TestClient(app) as client:
-        result = client.patch("/api/settings", json={"qbit_password": password}, headers=AUTH)
+        headers = csrf_headers(client)
+        result = client.patch("/api/settings", json={"qbit_password": password}, headers=headers)
         assert result.status_code == 200, result.text
         assert result.json()["qbit_password_set"]
         assert password not in result.text
@@ -135,10 +138,10 @@ def test_password_is_encrypted_and_environment_values_are_read_only(rig):
             json={
                 "ebook_library": str(rig.root / "somewhere"),
             },
-            headers=AUTH,
+            headers=headers,
         )
         assert response.status_code == 422
-        cleared = client.patch("/api/settings", json={"qbit_password": ""}, headers=AUTH)
+        cleared = client.patch("/api/settings", json={"qbit_password": ""}, headers=headers)
         assert not cleared.json()["qbit_password_set"]
     assert (
         rig.client.patch(
@@ -146,7 +149,7 @@ def test_password_is_encrypted_and_environment_values_are_read_only(rig):
             json={
                 "qbit_url": "https://example.test",
             },
-            headers=AUTH,
+            headers=csrf_headers(rig.client),
         ).status_code
         == 422
     )
@@ -163,7 +166,7 @@ def test_chunked_request_with_no_content_length_is_bounded(rig):
         "/api/epub/inspect",
         content=body(),
         headers={
-            **AUTH,
+            **csrf_headers(rig.client),
             "Content-Type": "multipart/form-data; boundary=demo",
         },
     )
@@ -174,7 +177,7 @@ def test_chunked_request_with_no_content_length_is_bounded(rig):
 def test_qbittorrent_connection_check_and_auth_refresh(rig, modern_auth):
     rig.fake.modern_auth = modern_auth
     rig.fake.expire_once = True
-    response = rig.client.post("/api/settings/test-qbittorrent", headers=AUTH)
+    response = rig.client.post("/api/settings/test-qbittorrent", headers=csrf_headers(rig.client))
     assert response.status_code == 200, response.text
     assert response.json() == {"api_version": "2.11.3"}
     assert rig.fake.logins == 2

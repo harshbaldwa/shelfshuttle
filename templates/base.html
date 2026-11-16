@@ -9,9 +9,8 @@
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body class="{% if page %}app-shell{% else %}login-shell{% endif %}">
+<body class="app-shell">
   <a class="skip" href="#main">Skip to content</a>
-  {% if page %}
   <aside class="sidebar">
     <a class="brand" href="/">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -24,13 +23,8 @@
     </nav>
     <div class="sidebar-footer">
       <button class="theme-button" type="button" data-theme-toggle><span aria-hidden="true">◐</span> <span data-theme-label>Change theme</span></button>
-      <form action="/logout" method="post">
-        <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <button class="sign-out" type="submit"><span aria-hidden="true">↪</span> Sign out</button>
-      </form>
     </div>
   </aside>
-  {% endif %}
   <main id="main" class="main-content">
     {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
     {% block main %}{% endblock %}

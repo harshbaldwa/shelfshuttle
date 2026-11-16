@@ -1,8 +1,8 @@
 # Troubleshooting
 
-## I cannot stay signed in
+## The browser says the request token expired
 
-Confirm that you are browsing the correct origin and that the browser accepts cookies. Secure cookies require HTTPS in ordinary deployments. For a loopback-only HTTP instance, set `SHELFSHUTTLE_COOKIE_SECURE=false` and recreate the service. If a login form was open while credentials changed, reload it to acquire a new request token.
+Reload the page for a fresh token and confirm that the browser accepts cookies. Use the HTTPS hostname configured at your proxy. For loopback-only HTTP development, set `SHELFSHUTTLE_COOKIE_SECURE=false`. If the proxy keeps asking you to sign in, check its authentication middleware and identity provider.
 
 ## qBittorrent connection test fails
 

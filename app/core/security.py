@@ -1,25 +1,13 @@
-import hashlib
 import hmac
 import secrets
-import time
-from collections import deque
-from threading import Lock
 
 from fastapi import HTTPException, Request
 from starlette.formparsers import MultiPartException
 from starlette.responses import PlainTextResponse
 
 
-def session_secret(key: bytes, deployment) -> str:
-    credentials = deployment.admin_username + "\0" + deployment.admin_password.get_secret_value()
-    return hmac.new(key, b"shelfshuttle-session:" + credentials.encode(), "sha256").hexdigest()
-
-
-def matches(left: str, right: str) -> bool:
-    return hmac.compare_digest(
-        hashlib.sha256(left.encode()).digest(),
-        hashlib.sha256(right.encode()).digest(),
-    )
+def csrf_signing_key(key: bytes) -> str:
+    return hmac.new(key, b"shelfshuttle-csrf", "sha256").hexdigest()
 
 
 def csrf_token(request: Request) -> str:
@@ -28,46 +16,15 @@ def csrf_token(request: Request) -> str:
     return request.session["csrf"]
 
 
-def bearer(request: Request) -> bool:
-    token = request.app.state.deployment.api_token.get_secret_value()
-    scheme, _, value = request.headers.get("authorization", "").partition(" ")
-    return bool(token and scheme.lower() == "bearer" and matches(token, value))
-
-
-def authenticated(request: Request) -> bool:
-    return bool(request.session.get("admin")) or (
-        request.url.path.startswith("/api/") and bearer(request)
-    )
-
-
 def protect(request: Request, form=None) -> None:
-    if request.url.path.startswith("/api/") and bearer(request):
-        return
     sent = request.headers.get("x-csrf-token") or (form.get("_csrf") if form else None)
     expected = request.session.get("csrf")
-    if not isinstance(sent, str) or not isinstance(expected, str) or not matches(sent, expected):
+    if (
+        not isinstance(sent, str)
+        or not isinstance(expected, str)
+        or not hmac.compare_digest(sent.encode(), expected.encode())
+    ):
         raise HTTPException(403, "The request token expired. Reload the page and try again.")
-
-
-class LoginLimiter:
-    def __init__(self):
-        self.failures = deque(maxlen=8)
-        self.lock = Lock()
-
-    def login(self, deployment, username: str, password: str):
-        now = time.monotonic()
-        with self.lock:
-            while self.failures and now - self.failures[0] >= 60:
-                self.failures.popleft()
-            if len(self.failures) == self.failures.maxlen:
-                raise HTTPException(429, "Too many login attempts. Try again in one minute.")
-            correct_user = matches(username, deployment.admin_username)
-            correct_password = matches(password, deployment.admin_password.get_secret_value())
-            if correct_user and correct_password:
-                self.failures.clear()
-                return
-            self.failures.append(now)
-        raise HTTPException(401, "The username or password is incorrect.")
 
 
 class RequestPolicy:
