@@ -1,9 +1,10 @@
 import errno
+import io
 import os
 import stat
 from base64 import b32encode
 from pathlib import Path
-from zipfile import ZipInfo
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 from conftest import (
@@ -454,11 +455,45 @@ def test_exclusive_copy_resumes_partial_mp3_after_restart(rig, monkeypatch):
         assert (destination / path.parent.name / path.name).read_bytes() == path.read_bytes()
 
 
+@pytest.mark.parametrize("mimetype", ["late", "compressed", "missing", "invalid"])
+def test_nonconforming_epub_marker_is_normalized_on_import(rig, mimetype):
+    raw = epub_bytes(mimetype=mimetype, cover=True)
+    inspected = rig.client.post(
+        "/api/epub/inspect", files={"epub": ("Orbit.epub", raw)}, headers=AUTH
+    )
+    assert inspected.status_code == 200, inspected.text
+    assert inspected.json()["title"] == "A Small Orbit"
+    job = submit(rig, epub=("Orbit.epub", raw))
+    rig.tick()
+    result = get_job(rig, job["id"])
+    assert result["status"] == "complete", result
+    destination = Path(job["destinations"]["ebook"]) / "Orbit.epub"
+    with ZipFile(destination) as repaired, ZipFile(io.BytesIO(raw)) as original:
+        first = repaired.infolist()[0]
+        assert first.filename == "mimetype" and first.header_offset == 0
+        assert first.compress_type == ZIP_STORED
+        assert repaired.read(first) == b"application/epub+zip"
+        assert {
+            name: repaired.read(name) for name in repaired.namelist() if name != "mimetype"
+        } == {name: original.read(name) for name in original.namelist() if name != "mimetype"}
+
+
+def test_zip_without_epub_package_is_rejected(rig):
+    raw = io.BytesIO()
+    with ZipFile(raw, "w") as archive:
+        archive.writestr("notes.txt", "A regular ZIP archive")
+    response = rig.submit(epub=("renamed.epub", raw.getvalue()))
+    assert response.status_code == 422
+    assert "does not contain an EPUB package" in response.json()["detail"]
+    assert not rig.deployment.intake_mount.exists()
+
+
 @pytest.mark.parametrize(
     "raw",
     [
         b"not a ZIP",
         epub_bytes(extra=("../escape.xhtml", b"x")),
+        epub_bytes(mimetype="missing", extra=("../escape.xhtml", b"x")),
         epub_bytes(extra=("book/duplicate.bin", b"x" * (2 * 1024**2))),
         b"x" * (1024**2 + 1),
     ],

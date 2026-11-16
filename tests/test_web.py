@@ -1,8 +1,9 @@
 import re
 import sqlite3
+from pathlib import Path
 
 import pytest
-from conftest import AUTH, DIGEST, PASSWORD, epub_bytes
+from conftest import AUTH, DIGEST, PASSWORD, epub_bytes, write_audio
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -76,6 +77,31 @@ def test_authentication_csrf_ui_and_cover(rig):
     assert "A Small Orbit" in client.get("/dashboard/content").text
     assert client.post("/logout", data={"_csrf": csrf}, follow_redirects=False).status_code == 303
     assert client.get("/api/jobs").status_code == 401
+
+
+def test_add_book_form_imports_pair_with_misordered_epub_marker(rig):
+    audio = write_audio(rig.downloads / "Orbit.m4b")
+    rig.fake.complete(rig.downloads, [audio])
+    client = rig.client
+    page = sign_in(client)
+    csrf = re.search(r'meta name="csrf-token" content="([^"]+)"', page.text)[1]
+    response = client.post(
+        "/add",
+        data={
+            "_csrf": csrf,
+            "format": "combined",
+            "author": "Ada Reed",
+            "title": "A Small Orbit",
+            "torrent": DIGEST,
+        },
+        files={"epub": ("Orbit.epub", epub_bytes(mimetype="late"))},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    rig.tick()
+    (job,) = client.get("/api/jobs", headers=AUTH).json()
+    assert job["status"] == "complete", job
+    assert all((Path(path) / "Orbit.epub").is_file() for path in job["destinations"].values())
 
 
 def test_password_is_encrypted_and_environment_values_are_read_only(rig):

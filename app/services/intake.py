@@ -5,7 +5,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from app.core.paths import UnsafePath, clean_component, directory_fd, regular_file, sync_directory
-from app.services.metadata import InvalidMedia
+from app.services.metadata import InvalidMedia, repair_epub_mimetype
 
 
 def upload_name(filename: str) -> str:
@@ -28,16 +28,23 @@ def inspect_upload(upload, limit: int, provider):
     return name, book
 
 
-def receive_upload(root: Path, job_id: str, name: str, upload) -> Path:
+def receive_upload(
+    root: Path, job_id: str, name: str, upload, *, book, limit: int, provider
+) -> Path:
     with directory_fd(root, create=True, mode=0o700) as root_fd:
         os.mkdir(job_id, 0o700, dir_fd=root_fd)
         try:
             with directory_fd(root / job_id) as job_fd:
                 fd = os.open(
-                    name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=job_fd
+                    name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=job_fd
                 )
-                with os.fdopen(fd, "wb") as output:
-                    shutil.copyfileobj(upload.file, output, 1024**2)
+                with os.fdopen(fd, "w+b") as output:
+                    if book.needs_mimetype_repair:
+                        repair_epub_mimetype(upload.file, output, limit)
+                        if provider.ebook(output).needs_mimetype_repair:
+                            raise InvalidMedia("The EPUB mimetype entry could not be repaired.")
+                    else:
+                        shutil.copyfileobj(upload.file, output, 1024**2)
                     output.flush()
                     os.fsync(output.fileno())
                 sync_directory(job_fd, root / job_id)

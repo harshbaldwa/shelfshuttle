@@ -8,6 +8,10 @@ Confirm that you are browsing the correct origin and that the browser accepts co
 
 Check the Web UI URL from the container's network, including any proxy path. `localhost` inside ShelfShuttle refers to ShelfShuttle itself. Save credentials before testing. For HTTPS, use a certificate trusted by the container. Check any proxy host validation and qBittorrent Web UI allow-list settings. Keep authentication and CSRF checks enabled.
 
+## An EPUB fails upload validation
+
+ShelfShuttle checks the ZIP and reads the EPUB package and its reading order. If the package is readable and the archive passes its safety checks, ShelfShuttle can repair a missing, misplaced, compressed, or incorrect `mimetype` entry on upload. The repair keeps the publication resources intact. If the package or reading order is missing or damaged, export a fresh EPUB from your source and upload it again.
+
 ## A hash or magnet will not finish
 
 A new download submitted with a bare v1 hash relies on peer discovery, such as DHT. Check qBittorrent for paused torrents, missing metadata, unavailable peers, or stalled trackers. If the download requires a tracker, add it in qBittorrent or provide the full magnet when creating the job. A submitted job waits for qBittorrent to list the torrent before offering a retry. For a magnet that matches an existing torrent, confirm that you want ShelfShuttle to monitor it.

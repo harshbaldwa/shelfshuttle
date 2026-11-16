@@ -1,5 +1,6 @@
 import io
 import re
+import shutil
 import stat
 import struct
 import unicodedata
@@ -37,9 +38,14 @@ class BookMetadata:
     duration_seconds: float | None = None
     chapters: list[dict] = field(default_factory=list)
     cover: bytes | None = field(default=None, repr=False)
+    needs_mimetype_repair: bool = field(default=False, repr=False)
 
     def public(self) -> dict:
-        return {key: value for key, value in asdict(self).items() if key != "cover" and value}
+        return {
+            key: value
+            for key, value in asdict(self).items()
+            if key not in {"cover", "needs_mimetype_repair"} and value
+        }
 
 
 class MetadataProvider(Protocol):
@@ -54,6 +60,8 @@ MAX_XML = 2 * 1024**2
 MAX_COVER = 6 * 1024**2
 NS_OPF = "http://www.idpf.org/2007/opf"
 NS_DC = "http://purl.org/dc/elements/1.1/"
+NS_OCF = "urn:oasis:names:tc:opendocument:xmlns:container"
+EPUB_MIMETYPE = b"application/epub+zip"
 
 
 def clean_tag(value, limit: int = 200) -> str:
@@ -82,7 +90,7 @@ def safe_cover(raw: bytes) -> bytes | None:
         return None
 
 
-def _archive_members(archive):
+def _archive_members(archive) -> None:
     entries = archive.infolist()
     if not entries or len(entries) > 4096 or sum(info.file_size for info in entries) > MAX_EXPANDED:
         raise InvalidMedia("The EPUB exceeds safe ZIP expansion limits.")
@@ -102,11 +110,39 @@ def _archive_members(archive):
         ):
             raise InvalidMedia("The EPUB has unsafe, duplicated, or unsupported ZIP entries.")
         names.add(key)
-    first = entries[0]
-    if first.filename != "mimetype" or first.compress_type != 0 or first.file_size != 20:
-        raise InvalidMedia("The ZIP lacks a valid EPUB mimetype entry.")
-    if archive.read(first) != b"application/epub+zip" or archive.testzip() is not None:
-        raise InvalidMedia("The EPUB has an invalid mimetype or corrupted ZIP data.")
+    if archive.testzip() is not None:
+        raise InvalidMedia("The EPUB contains corrupted ZIP data.")
+
+
+def _has_standard_mimetype(archive) -> bool:
+    first = min(archive.infolist(), key=lambda item: item.header_offset)
+    return (
+        first.filename == "mimetype"
+        and first.header_offset == 0
+        and first.compress_type == zipfile.ZIP_STORED
+        and first.file_size == len(EPUB_MIMETYPE)
+        and not first.extra
+        and archive.read(first) == EPUB_MIMETYPE
+    )
+
+
+def repair_epub_mimetype(source: BinaryIO, output: BinaryIO, limit: int) -> None:
+    """Repackage an EPUB that has already passed package and ZIP validation."""
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(output, "w") as repaired:
+        repaired.writestr("mimetype", EPUB_MIMETYPE, compress_type=zipfile.ZIP_STORED)
+        for member in archive.infolist():
+            if member.filename == "mimetype":
+                continue
+            # Keep the resource paths, data, and compression types. New ZIP headers are generated.
+            entry = zipfile.ZipInfo(member.filename, member.date_time)
+            entry.compress_type = member.compress_type
+            entry.file_size = member.file_size
+            with archive.open(member) as original, repaired.open(entry, "w") as replacement:
+                shutil.copyfileobj(original, replacement, length=1024**2)
+            if output.tell() > limit:
+                raise InvalidMedia("The repaired EPUB exceeds the configured upload limit.")
+    if output.tell() > limit:
+        raise InvalidMedia("The repaired EPUB exceeds the configured upload limit.")
 
 
 def _check_zip_directory(source: BinaryIO) -> None:
@@ -173,9 +209,15 @@ def _epub_href(package: str, href: str) -> str:
 
 def _ebook(archive) -> BookMetadata:
     _archive_members(archive)
+    if "META-INF/container.xml" not in archive.namelist():
+        raise InvalidMedia("The ZIP does not contain an EPUB package (META-INF/container.xml).")
     container = XML.fromstring(_read(archive, "META-INF/container.xml", MAX_XML))
-    root = container.find(".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile")
-    if root is None or root.get("media-type") != "application/oebps-package+xml":
+    root = container.find(f"{{{NS_OCF}}}rootfiles/{{{NS_OCF}}}rootfile")
+    if (
+        container.tag != f"{{{NS_OCF}}}container"
+        or root is None
+        or root.get("media-type") != "application/oebps-package+xml"
+    ):
         raise InvalidMedia("The EPUB is missing a package document.")
     package = "/".join(relative_parts(root.attrib["full-path"], archive=True))
     opf = XML.fromstring(_read(archive, package, MAX_XML))
@@ -190,8 +232,9 @@ def _ebook(archive) -> BookMetadata:
         raise InvalidMedia("The EPUB has no reading order.")
     for item in spine:
         resource = manifest[item.attrib["idref"]]
-        if archive.getinfo(_epub_href(package, resource.attrib["href"])).is_dir():
-            raise InvalidMedia("An EPUB reading-order resource is a directory.")
+        chapter = archive.getinfo(_epub_href(package, resource.attrib["href"]))
+        if chapter.is_dir() or not chapter.file_size:
+            raise InvalidMedia("An EPUB reading-order resource is missing or empty.")
 
     def dc(tag: str) -> str:
         return clean_tag(metadata.findtext(f"{{{NS_DC}}}{tag}", ""))
@@ -232,6 +275,7 @@ def _ebook(archive) -> BookMetadata:
         language=dc("language"),
         series=series,
         cover=cover,
+        needs_mimetype_repair=not _has_standard_mimetype(archive),
     )
 
 

@@ -23,13 +23,21 @@ PASSWORD = "test-password-" + "x" * 20
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
-def epub_bytes(*, title="A Small Orbit", author="Ada Reed", extra=None, cover=False):
+def epub_bytes(
+    *, title="A Small Orbit", author="Ada Reed", extra=None, cover=False, mimetype="standard"
+):
     image = io.BytesIO()
     if cover:
         Image.new("RGB", (24, 32), "#643bd1").save(image, "PNG")
     data = io.BytesIO()
     with ZipFile(data, "w", compression=ZIP_DEFLATED) as archive:
-        archive.writestr("mimetype", "application/epub+zip", ZIP_STORED)
+        if mimetype in {"standard", "compressed", "invalid"}:
+            marker = "application/epub+zip"
+            if mimetype == "invalid":
+                marker += "\n"
+            archive.writestr(
+                "mimetype", marker, ZIP_DEFLATED if mimetype == "compressed" else ZIP_STORED
+            )
         archive.writestr(
             "META-INF/container.xml",
             """
@@ -63,6 +71,8 @@ def epub_bytes(*, title="A Small Orbit", author="Ada Reed", extra=None, cover=Fa
             archive.writestr("book/cover.png", image.getvalue())
         if extra:
             archive.writestr(*extra)
+        if mimetype == "late":
+            archive.writestr("mimetype", "application/epub+zip", ZIP_STORED)
     return data.getvalue()
 
 

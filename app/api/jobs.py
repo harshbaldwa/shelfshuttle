@@ -120,8 +120,17 @@ def create_job(runtime, data) -> dict:
         try:
             if upload:
                 provider = PROVIDERS[settings.metadata_provider]
-                name, book = inspect_upload(upload, runtime.deployment.upload_limit, provider)
-                path = receive_upload(settings.intake_root, job_id, name, upload)
+                limit = runtime.deployment.upload_limit
+                name, book = inspect_upload(upload, limit, provider)
+                path = receive_upload(
+                    settings.intake_root,
+                    job_id,
+                    name,
+                    upload,
+                    book=book,
+                    limit=limit,
+                    provider=provider,
+                )
                 metadata["ebook"] = book.public()
                 if book.cover:
                     save_cover(runtime.deployment.data, job_id, book.cover)
