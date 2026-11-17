@@ -39,6 +39,8 @@ docker compose pull
 docker compose up -d --wait
 ```
 
+Starting with `v0.3.0`, stable GitHub releases publish matching image tags for AMD64 and ARM64. Pin a deployment with `image: ghcr.io/harshbaldwa/shelfshuttle:v0.3.0`. The `latest` tag follows the stable GitHub release marked Latest. [GitHub releases](https://github.com/harshbaldwa/shelfshuttle/releases)
+
 | Container path | Purpose |
 | --- | --- |
 | `/app/data` | Durable state. The image prepares the `./data` bind automatically. |
@@ -48,6 +50,8 @@ docker compose up -d --wait
 | `/media/books/audiobooks` | Audiobook-only and paired imports. |
 
 ShelfShuttle creates a private `.shelfshuttle` directory inside each library mount for staging. Exclude this hidden directory if your library manager scans dot-directories. No library or staging variables are needed for the mounts above.
+
+After an import succeeds, ShelfShuttle removes its uploaded EPUB copy from intake. Under **Completed imports**, use **Remove from history** to delete the job record while keeping the imported files and qBittorrent downloads.
 
 Set the qBittorrent download root to the path the client sees for this category. ShelfShuttle maps that path to `/downloads`. Save any qBittorrent credentials in Settings, or use the environment or a mounted secret file. Run **Test saved connection** from Settings to check access. [Configuration reference](docs/configuration.md)
 

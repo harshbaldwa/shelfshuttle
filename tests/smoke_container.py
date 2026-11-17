@@ -91,6 +91,13 @@ def main() -> None:
             library / "Test Author/Test Book/Test Author - Test Book.epub"
         ).read_bytes() == content
         assert not list((library / ".shelfshuttle").iterdir())
+        for _ in range(10):
+            job = client.get(f"/api/jobs/{job['id']}").raise_for_status().json()
+            if job["can_forget"]:
+                break
+            time.sleep(1)
+        assert job["can_forget"], job
+        assert not (Path("/app/intake") / job["id"]).exists()
 
 
 if __name__ == "__main__":

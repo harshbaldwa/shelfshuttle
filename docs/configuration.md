@@ -68,6 +68,7 @@ The reverse proxy authenticates API requests. For a POST, PATCH, or DELETE reque
 | `GET /api/jobs/{id}` | Retrieve job status, destinations, progress from 0 to 1, and extracted tags. |
 | `GET /api/jobs/{id}/cover` | Retrieve a sanitized JPEG cover when available. |
 | `DELETE /api/jobs/{id}` | Remove a queue job, its uploaded EPUB, and any matching unpublished staging directories. Returns 204 on success or 409 when the worker is busy or the job is currently importing or already completed. |
+| `DELETE /api/jobs/{id}/record` | Remove a completed job record after intake cleanup. Returns 204 on success or 409 if the import or its intake cleanup is pending. The operation only deletes the database row. |
 | `POST /api/jobs/{id}/action` | Send JSON with `intent` set to `retry` or `approve`, optional `author` and `title` for review, and optional `torrent` to supply a full magnet with the original info hash. |
 | `GET /api/destinations` | Preview destination paths with query fields `format`, `author`, and `title`. |
 | `POST /api/epub/inspect` | Inspect a multipart `epub` and return suggested metadata. |

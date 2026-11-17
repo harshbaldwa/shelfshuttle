@@ -47,6 +47,12 @@ After changing container library paths, recreate the ShelfShuttle container. Ret
 
 Use **Delete from queue** on a failed or queued job. Confirm to remove the job, its uploaded EPUB, and any matching unpublished staging directories. If cleanup is interrupted, the worker retries it when it resumes.
 
+## Uploaded EPUB copies in intake
+
+ShelfShuttle gives each uploaded EPUB its own job directory. Once the import is recorded as complete, the worker deletes the intake copy and removes the directory if it is empty. The worker also cleans up uploads referenced by completed jobs from older versions. Uploads used by queued, failed, review, and dry-run jobs remain available. Unrecognized files and directories stay in place.
+
+If a completed job reports that intake cleanup will retry, check the worker's access to the original intake mount. The job remains completed and its library files stay available. **Remove from history** becomes available after cleanup.
+
 ## How should I back up and update the app?
 
 Stop the ShelfShuttle service before making a filesystem copy of its state, intake, and any staging directories with pending jobs. Keep SQLite files and the private key together. Back up libraries separately. For an update, run `docker compose pull` followed by `docker compose up -d --wait`. Keep the same mount paths and storage.

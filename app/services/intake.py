@@ -60,26 +60,34 @@ def discard_upload(path: Path) -> None:
         shutil.rmtree(path.parent.name, dir_fd=fd)
 
 
-def remove_job_intake(deployment, job_id: str, epub_path: str | None) -> None:
-    if epub_path:
-        path = Path(epub_path)
-        if (
-            not path.parent.parent.is_relative_to(deployment.intake_mount)
-            or path.parent.name != job_id
-            or path.suffix.lower() != ".epub"
-        ):
-            raise UnsafePath("Restore the original intake mount before retrying deletion.")
-        with suppress(FileNotFoundError), directory_fd(path.parent.parent) as intake_fd:
-            with directory_fd(path.parent) as job_fd:
-                with suppress(FileNotFoundError):
-                    os.unlink(path.name, dir_fd=job_fd)
-                sync_directory(job_fd, path.parent)
+def remove_job_upload(intake_mount: Path, job_id: str, epub_path: str) -> None:
+    path = Path(epub_path)
+    if (
+        not path.parent.parent.is_relative_to(intake_mount)
+        or path.parent.name != job_id
+        or path.suffix.lower() != ".epub"
+    ):
+        raise UnsafePath("Restore the original intake mount before retrying cleanup.")
+    with suppress(FileNotFoundError), directory_fd(path.parent.parent) as intake_fd:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        job_fd = os.open(job_id, flags, dir_fd=intake_fd)
+        try:
+            with suppress(FileNotFoundError):
+                os.unlink(path.name, dir_fd=job_fd)
+            sync_directory(job_fd, path.parent)
             try:
                 os.rmdir(job_id, dir_fd=intake_fd)
             except OSError as exc:
                 if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
                     raise
-            sync_directory(intake_fd, path.parent.parent)
+        finally:
+            os.close(job_fd)
+        sync_directory(intake_fd, path.parent.parent)
+
+
+def remove_job_intake(deployment, job_id: str, epub_path: str | None) -> None:
+    if epub_path:
+        remove_job_upload(deployment.intake_mount, job_id, epub_path)
     with suppress(FileNotFoundError), directory_fd(deployment.data / "covers") as cover_fd:
         for suffix in (".jpg", ".tmp"):
             with suppress(FileNotFoundError):

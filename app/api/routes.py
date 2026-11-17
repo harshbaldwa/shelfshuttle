@@ -17,6 +17,7 @@ from app.api.jobs import (
     change_job,
     create_job,
     delete_job,
+    forget_job,
     format_field,
     get_job,
     public_job,
@@ -204,6 +205,8 @@ async def action_page(request: Request, job_id: str):
             protect(request, data)
             if data.get("intent") == "delete":
                 await run_in_threadpool(delete_job, runtime, job_id)
+            elif data.get("intent") == "forget":
+                await run_in_threadpool(forget_job, runtime, job_id)
             else:
                 await run_in_threadpool(change_job, runtime, job_id, data)
         except (ValueError, HTTPException) as exc:
@@ -325,6 +328,13 @@ def cover_api(request: Request, job_id: str):
 def delete_api(request: Request, job_id: str):
     protect(request)
     delete_job(request.app.state.runtime, job_id)
+    return Response(status_code=204)
+
+
+@router.delete("/api/jobs/{job_id}/record", status_code=204)
+def forget_api(request: Request, job_id: str):
+    protect(request)
+    forget_job(request.app.state.runtime, job_id)
     return Response(status_code=204)
 
 

@@ -3,7 +3,7 @@ import math
 import time
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.paths import UnsafePath, book_file_stem, describe_filesystem_error, regular_file
@@ -17,7 +17,7 @@ from app.services.importing import (
     stage_targets,
     tracked_audio,
 )
-from app.services.intake import save_cover
+from app.services.intake import remove_job_upload, save_cover
 from app.services.metadata import PROVIDERS, InvalidMedia, aggregate_audio, mismatches
 from app.services.qbittorrent import QBittorrent, TorrentError, TorrentUnavailable
 from app.services.queue import DELETING, finish_deletion
@@ -73,14 +73,26 @@ class Worker:
     def _tick_locked(self, stop):
         with self.db() as session:
             ids = session.scalars(
-                select(Job.id).where(Job.status.in_(ACTIVE)).order_by(Job.created_at)
+                select(Job.id)
+                .where(
+                    or_(
+                        Job.status.in_(ACTIVE),
+                        and_(Job.status == "complete", Job.epub_path.is_not(None)),
+                    )
+                )
+                .order_by(Job.created_at)
             ).all()
         for job_id in ids:
             if stop is not None and stop.is_set():
                 break
             with self.db() as session:
                 job = session.get(Job, job_id)
-                if job is None or job.status not in ACTIVE:
+                if job is None:
+                    continue
+                if job.status == "complete":
+                    self.clean_completed_upload(session, job)
+                    continue
+                if job.status not in ACTIVE:
                     continue
                 if job.status == DELETING:
                     finish_deletion(session, job, self.settings.deployment)
@@ -107,6 +119,24 @@ class Worker:
                     )
                     LOG.error("Processing failed for job %s.", job.id)
                 session.commit()
+                if job.status == "complete":
+                    self.clean_completed_upload(session, job)
+
+    def clean_completed_upload(self, session, job):
+        if not job.epub_path:
+            return
+        try:
+            remove_job_upload(self.settings.deployment.intake_mount, job.id, job.epub_path)
+        except (OSError, UnsafePath) as exc:
+            reason = describe_filesystem_error(exc) if isinstance(exc, OSError) else str(exc)
+            detail = f"Imported. Intake cleanup will retry. {reason}"
+            if job.detail == detail:
+                return
+            job.detail = detail
+        else:
+            job.epub_path = None
+            job.detail = None
+        session.commit()
 
     def process(self, session, job, settings):
         job.detail = None

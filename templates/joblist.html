@@ -56,7 +56,7 @@
         {% endfor %}
       </details>
       {% endif %}
-      {% if job.status in ('failed', 'review') or job.can_delete %}
+      {% if job.status in ('failed', 'review') or job.can_delete or job.can_forget %}
         <div class="job-actions">
           {% if job.status in ('failed', 'review') %}
           <form method="post" action="/jobs/{{ job.id }}/action">
@@ -86,6 +86,16 @@
               <input type="hidden" name="_csrf" value="{{ csrf }}">
               <p>{% if job.format != 'audio' %}This deletes the uploaded EPUB from intake. {% endif %}{% if job.prepared %}It also removes unpublished staging files. {% endif %}Library files and qBittorrent downloads stay in place.</p>
               <button name="intent" value="delete" class="button danger small">Confirm deletion</button>
+            </form>
+          </details>
+          {% endif %}
+          {% if job.can_forget %}
+          <details class="review-form">
+            <summary>Remove from history</summary>
+            <form method="post" action="/jobs/{{ job.id }}/action" class="fields">
+              <input type="hidden" name="_csrf" value="{{ csrf }}">
+              <p>Remove this record from ShelfShuttle. Library files and qBittorrent downloads stay in place.</p>
+              <button name="intent" value="forget" class="button danger small">Remove record</button>
             </form>
           </details>
           {% endif %}

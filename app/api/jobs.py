@@ -49,6 +49,7 @@ def public_job(job: Job) -> dict:
         "review_kind": job.review_kind,
         "prepared": bool(job.prepared),
         "can_delete": can_delete(job),
+        "can_forget": job.status == "complete" and not job.epub_path,
         "created_at": job.created_at,
         "cover_url": f"/api/jobs/{job.id}/cover" if job.cover else None,
     }
@@ -224,3 +225,15 @@ def delete_job(runtime, job_id: str) -> None:
             session.commit()
             if detail := finish_deletion(session, job, runtime.deployment):
                 raise HTTPException(409, detail)
+
+
+def forget_job(runtime, job_id: str) -> None:
+    with runtime.db() as session:
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        job = get_job(session, job_id)
+        if job.status != "complete":
+            raise HTTPException(409, "Only completed imports can be removed from history.")
+        if job.epub_path:
+            raise HTTPException(409, "Wait for intake cleanup before removing this record.")
+        session.delete(job)
+        session.commit()

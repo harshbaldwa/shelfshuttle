@@ -5,6 +5,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
 
+from app import __version__
 from app.core.config import Settings
 
 
@@ -60,7 +61,10 @@ class QBittorrent:
         self.settings = settings
         self.client = httpx.Client(
             base_url=settings.qbit_url + "/api/v2/",
-            headers={"Referer": settings.qbit_url + "/", "User-Agent": "ShelfShuttle/0.2.0"},
+            headers={
+                "Referer": settings.qbit_url + "/",
+                "User-Agent": f"ShelfShuttle/{__version__}",
+            },
             timeout=httpx.Timeout(10, connect=5),
             follow_redirects=False,
             trust_env=False,

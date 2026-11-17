@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
+from app import __version__
 from app.api.routes import ROOT, router
 from app.core.config import deployment_from_env, private_key
 from app.core.security import RequestPolicy, csrf_signing_key
@@ -54,7 +55,7 @@ def create_app(deployment=None, *, overrides=None, worker_client=None) -> FastAP
 
     app = FastAPI(
         title="ShelfShuttle",
-        version="0.2.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

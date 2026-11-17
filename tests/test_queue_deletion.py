@@ -11,9 +11,11 @@ from conftest import (
     torrent,
     write_audio,
 )
+from fastapi.testclient import TestClient
 
-from app.models.database import queue_lock
+from app.models.database import Job, queue_lock
 from app.services import importing, queue
+from app.workers import worker
 
 
 def test_delete_through_dashboard_removes_upload_and_cover(rig):
@@ -82,6 +84,73 @@ def test_delete_cannot_race_worker_or_remove_completed_job(rig):
     assert get_job(rig, job["id"])["status"] == "complete"
     assert rig.client.delete(endpoint, headers=csrf_headers(rig.client)).status_code == 409
     assert (Path(job["destinations"]["ebook"]) / f"{BOOK_FILENAME_STEM}.epub").is_file()
+
+
+def test_remove_completed_record_preserves_library_and_qbittorrent(rig):
+    source = write_audio(rig.downloads / "download.m4b")
+    rig.fake.complete(rig.downloads, [source])
+    job = rig.submit("combined", epub=("Orbit.epub", epub_bytes(cover=True))).json()
+    endpoint = f"/api/jobs/{job['id']}"
+    assert (
+        rig.client.delete(f"{endpoint}/record", headers=csrf_headers(rig.client)).status_code == 409
+    )
+
+    rig.tick()
+    completed = get_job(rig, job["id"])
+    assert completed["status"] == "complete"
+    assert completed["can_forget"]
+    assert not (rig.deployment.intake_mount / job["id"]).exists()
+    assert rig.client.get(completed["cover_url"]).status_code == 200
+    library = Path(job["destinations"]["audio"])
+    media = {path.name: path.read_bytes() for path in library.iterdir()}
+    assert set(media) == {f"{BOOK_FILENAME_STEM}.epub", f"{BOOK_FILENAME_STEM}.m4b"}
+    requests = rig.fake.requests.copy()
+
+    page = rig.client.get("/")
+    assert "Remove from history" in page.text
+    assert rig.client.delete(f"{endpoint}/record").status_code == 403
+    csrf = re.search(r'meta name="csrf-token" content="([^"]+)"', page.text)[1]
+    response = rig.client.post(
+        f"/jobs/{job['id']}/action",
+        data={"intent": "forget", "_csrf": csrf},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert rig.client.get(endpoint).status_code == 404
+    assert {path.name: path.read_bytes() for path in library.iterdir()} == media
+    assert source.is_file()
+    assert rig.fake.requests == requests
+
+
+def test_worker_retries_completed_cleanup_after_restart(rig, monkeypatch):
+    job = rig.submit().json()
+    upload = rig.deployment.intake_mount / job["id"] / "Orbit.epub"
+    unrelated = upload.parent / "keep.txt"
+    unrelated.write_text("unrelated")
+
+    def temporarily_unwritable(*args):
+        raise PermissionError(errno.EACCES, "permission denied")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(worker, "remove_job_upload", temporarily_unwritable)
+        rig.tick()
+        pending = get_job(rig, job["id"])
+        assert pending["status"] == "complete"
+        assert "Intake cleanup will retry" in pending["detail"]
+        assert upload.exists()
+
+    # Older versions left the same upload reference on completed rows without a warning.
+    with rig.state.runtime.db() as session:
+        session.get(Job, job["id"]).detail = None
+        session.commit()
+    app = rig.app_factory()
+    with TestClient(app) as client:
+        app.state.worker.tick()
+        assert not upload.exists()
+        assert unrelated.read_text() == "unrelated"
+        endpoint = f"/api/jobs/{job['id']}"
+        assert client.delete(f"{endpoint}/record", headers=csrf_headers(client)).status_code == 204
+        assert client.get(endpoint).status_code == 404
 
 
 def test_worker_finishes_deletion_after_cleanup_failure(rig, monkeypatch):
